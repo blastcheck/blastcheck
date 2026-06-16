@@ -13,17 +13,21 @@ import type { CheckResult } from "./types.js";
 export { CHECK_IDS, isCheckId } from "./checks/registry.js";
 // Re-export the foundation type surface for API consumers.
 export type {
+  Budget,
   Check,
   CheckClass,
   CheckContext,
+  CheckCoverage,
   CheckId,
   CheckResult,
   CheckStatus,
   Contract,
   DiffEntry,
+  EvidenceLevel,
   ExitCode,
   Field,
   Finding,
+  RequiredCheck,
 } from "./types.js";
 export { EXIT } from "./types.js";
 

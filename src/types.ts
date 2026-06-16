@@ -61,6 +61,24 @@ export type CheckClass = "git-only" | "trajectory";
  */
 export type Field = "diff" | "taskMd" | "repoSize" | "contract" | "trajectory";
 
+/**
+ * Per-check coverage in the evidence profile (FR16). A check that ran reports
+ * `full`; one the runner skipped reports `skipped`. The finer `partial` level
+ * (a check that ran on a degraded trace) and `absent` land with the trajectory
+ * loader in Story 2.1 — this story only builds the scaffold.
+ */
+export type CheckCoverage = "full" | "partial" | "skipped" | "absent";
+
+/**
+ * Honest coverage profile of an audit — NOT a binary flag (spec §5). It records
+ * whether a trajectory was present and which checks actually ran, so the tool
+ * never claims to have checked something it did not see.
+ */
+export interface EvidenceLevel {
+  trajectory: "present" | "absent";
+  checks: Partial<Record<CheckId, CheckCoverage>>;
+}
+
 /** A single entry from `git diff --numstat`. `null` count ⇒ binary file. */
 export interface DiffEntry {
   /** Normalized POSIX path relative to repo root. */
@@ -95,16 +113,50 @@ export interface Check {
   run(ctx: CheckContext): CheckResult;
 }
 
+/** Soft budget (spec §2). Overridable via `.blastcheck.yml → budget`. */
+export interface Budget {
+  /** Max tool calls before `extraneous-tool-calls` penalizes (check 3). */
+  maxToolCalls: number;
+  /** Advisory cap on files changed. */
+  maxFilesChanged: number;
+  /** Churn-% warn threshold; `2×` is the fail threshold (check 4). */
+  maxChurnPct: number;
+}
+
 /**
- * Parsed audit contract (foundation shape). Full three-source assembly and zod
- * validation land in Story 1.2; here we fix the camelCase TS surface only.
+ * One required-check pattern (spec §2.5). `cmd` is matched (prefix/regex) against
+ * Bash events in the trajectory by the `required-checks` check (Story 2.2).
+ *
+ * `source` fixes the gate strictness: `auto` (detected from a repo manifest) is a
+ * SOFT gate — the tool won't crit-fail the agent for an instruction it invented;
+ * `explicit` (written by a human in `.blastcheck.yml`) is a HARD gate.
+ */
+export interface RequiredCheck {
+  cmd: string;
+  source: "auto" | "explicit";
+}
+
+/**
+ * Parsed audit contract, assembled from three trust sources (Story 1.2, FR2):
+ *  - `deny`/`budget`/`thresholds` — tool defaults ← `.blastcheck.yml` override.
+ *  - `requiredChecks` — manifest autodetect (`auto`) ← `.blastcheck.yml` (`explicit`).
+ *  - `allow`/`goal` — read STRICTLY from `git show <baselineSha>:task.md`
+ *    (pinned, tamper-proof; HEAD is ignored — FR3).
+ *
+ * The TS surface is camelCase; the snake_case JSON/YAML boundary is crossed only
+ * in `contract/schema.ts` (rule #1 / AR5).
  */
 export interface Contract {
   baselineSha: string;
+  /** Agent-declared goal from baseline `task.md`; `null` when absent. */
+  goal: string | null;
   deny: string[];
+  /** Agent-declared in-scope globs; `[]` is valid (no pre-commitment). */
   allow: string[];
-  requiredChecks: CheckId[];
-  thresholds?: Record<string, number>;
+  requiredChecks: RequiredCheck[];
+  budget: Budget;
+  /** Per-score warn-below thresholds (spec §4.1); keyed by camelCase score id. */
+  thresholds: Record<string, number>;
 }
 
 /** Process exit codes (NFR10). `2` is a tool error, NOT an audit failure. */
