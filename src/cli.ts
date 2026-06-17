@@ -15,6 +15,11 @@ import { realpathSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
+import { runInit } from "./hooks/init.js";
+import { runPostToolUse } from "./hooks/post-tool-use.js";
+import { runSessionStart } from "./hooks/session-start.js";
+import { parseHookPayload, readStdin } from "./hooks/state.js";
+import { runStop } from "./hooks/stop.js";
 import { runAudit } from "./index.js";
 import { log, setVerbose } from "./log.js";
 import { printScorecard } from "./scorecard/print.js";
@@ -92,7 +97,53 @@ export function buildProgram(outcome: Outcome): Command {
       }
     });
 
+  // Distribution target #2 (Story 3.1): install the Claude Code hooks.
+  program
+    .command("init")
+    .description("Install Claude Code hooks (trajectory capture + audit on Stop).")
+    .option("-v, --verbose", "verbose (debug) logging to stderr")
+    .action(async (opts: { verbose?: boolean }) => {
+      setVerbose(Boolean(opts.verbose));
+      await runInit({ cwd: process.cwd() });
+    });
+
+  // Hidden hook entrypoints invoked BY the installed hooks — they read the
+  // Claude Code event payload from stdin. `hook stop` mirrors `run`'s contract
+  // (scorecard → stdout, verdict → exit code); the others never touch stdout.
+  const hook = program
+    .command("hook")
+    .description("Internal: Claude Code hook handlers (invoked via stdin).");
+
+  hook
+    .command("session-start")
+    .description("SessionStart handler: record the pre-commitment reference.")
+    .action(async () => {
+      const payload = parseHookPayload(await readStdin());
+      await runSessionStart(payload, hookCwd(payload));
+    });
+
+  hook
+    .command("post-tool-use")
+    .description("PostToolUse handler: append the normalized trajectory event.")
+    .action(async () => {
+      const payload = parseHookPayload(await readStdin());
+      await runPostToolUse(payload, hookCwd(payload));
+    });
+
+  hook
+    .command("stop")
+    .description("Stop handler: run the audit and emit scorecard.json to stdout.")
+    .action(async () => {
+      const payload = parseHookPayload(await readStdin());
+      outcome.code = await runStop(payload, hookCwd(payload));
+    });
+
   return program;
+}
+
+/** Resolve the repo dir for a hook: the payload's `cwd`, else `process.cwd()`. */
+function hookCwd(payload: Record<string, unknown> | undefined): string {
+  return typeof payload?.cwd === "string" ? payload.cwd : process.cwd();
 }
 
 /** Parse argv and resolve to an exit code. Never throws. */

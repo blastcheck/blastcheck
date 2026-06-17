@@ -46,4 +46,31 @@ describe("claude-code trajectory adapter", () => {
       step: 1,
     });
   });
+
+  it("reads the real PostToolUse `tool_response` shape (no exit_code for Bash)", () => {
+    const [event] = adaptClaudeCodePostToolUse({
+      tool_name: "Bash",
+      tool_input: { command: "npm run lint" },
+      tool_response: { stdout: "all good", stderr: "a warning", interrupted: false },
+    });
+
+    // Bash `tool_response` carries no exit code, so it is honestly omitted (NFR4).
+    expect(event).toEqual({
+      tool: "Bash",
+      args: { cmd: "npm run lint" },
+      step: 1,
+      stdout_tail: "all good",
+      stderr_tail: "a warning",
+    });
+  });
+
+  it("reads exit_code from `tool_response` when an agent provides one", () => {
+    const [event] = adaptClaudeCodePostToolUse({
+      tool_name: "Bash",
+      tool_input: { command: "pytest" },
+      tool_response: { exit_code: 1, stdout: "1 failed" },
+    });
+
+    expect(event).toMatchObject({ tool: "Bash", args: { cmd: "pytest" }, exit_code: 1 });
+  });
 });

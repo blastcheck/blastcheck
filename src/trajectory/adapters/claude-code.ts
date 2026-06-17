@@ -50,15 +50,32 @@ function adaptOne(input: unknown, step: number): ExternalTrajectoryEvent | undef
   const rawArgs = asRecord(record.args ?? record.input ?? record.tool_input);
   const path = firstString(rawArgs, ["path", "file_path", "filePath"]);
   const cmd = firstString(rawArgs, ["cmd", "command"]);
+  // The real Claude Code `PostToolUse` payload carries the tool result under
+  // `tool_response` (e.g. Bash → `{stdout, stderr, interrupted}`); older/internal
+  // shapes used `result`. Read both so the same adapter serves the live hook and
+  // the in-tree fixtures. Note: Bash `tool_response` has no exit code — that part
+  // simply degrades (no `exit_code` emitted), it is never fabricated (NFR4).
   const result = asRecord(record.result);
+  const response = asRecord(record.tool_response);
   const exitCode =
     firstNumber(record, ["exit_code", "exitCode"]) ??
-    firstNumber(result, ["exit_code", "exitCode"]);
+    firstNumber(result, ["exit_code", "exitCode"]) ??
+    firstNumber(response, ["exit_code", "exitCode"]);
   const stdoutTail = tail(
-    record.stdout_tail ?? record.stdout ?? result.stdout_tail ?? result.stdout,
+    record.stdout_tail ??
+      record.stdout ??
+      result.stdout_tail ??
+      result.stdout ??
+      response.stdout_tail ??
+      response.stdout,
   );
   const stderrTail = tail(
-    record.stderr_tail ?? record.stderr ?? result.stderr_tail ?? result.stderr,
+    record.stderr_tail ??
+      record.stderr ??
+      result.stderr_tail ??
+      result.stderr ??
+      response.stderr_tail ??
+      response.stderr,
   );
   const ts = firstString(record, ["ts", "timestamp"]);
 

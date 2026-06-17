@@ -9,6 +9,26 @@ import type { Scorecard } from "./scorecard/schema.js";
 const { runAuditMock } = vi.hoisted(() => ({ runAuditMock: vi.fn() }));
 vi.mock("./index.js", () => ({ runAudit: runAuditMock }));
 
+// The `init` / `hook` subcommands are wiring-only at the CLI layer; their
+// behavior is covered by the hooks' own tests. Here we mock them so the CLI test
+// stays a pure arg-parsing/exit-code check and never blocks on real stdin.
+const { runInitMock, runStopMock, runSessionStartMock, runPostToolUseMock, readStdinMock } =
+  vi.hoisted(() => ({
+    runInitMock: vi.fn(),
+    runStopMock: vi.fn(),
+    runSessionStartMock: vi.fn(),
+    runPostToolUseMock: vi.fn(),
+    readStdinMock: vi.fn(),
+  }));
+vi.mock("./hooks/init.js", () => ({ runInit: runInitMock }));
+vi.mock("./hooks/stop.js", () => ({ runStop: runStopMock }));
+vi.mock("./hooks/session-start.js", () => ({ runSessionStart: runSessionStartMock }));
+vi.mock("./hooks/post-tool-use.js", () => ({ runPostToolUse: runPostToolUseMock }));
+vi.mock("./hooks/state.js", () => ({
+  readStdin: readStdinMock,
+  parseHookPayload: (text: string) => (text === "" ? undefined : JSON.parse(text)),
+}));
+
 import { main } from "./cli.js";
 import { EXIT } from "./types.js";
 
@@ -40,6 +60,11 @@ describe("cli main", () => {
 
   beforeEach(() => {
     runAuditMock.mockReset();
+    for (const m of [runInitMock, runStopMock, runSessionStartMock, runPostToolUseMock]) {
+      m.mockReset();
+    }
+    readStdinMock.mockReset();
+    readStdinMock.mockResolvedValue("");
     // Suppress (and capture) CLI output so the test log stays clean.
     stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -120,5 +145,33 @@ describe("cli main", () => {
     // verdict must still map to exit 1, not the tool-error exit 2.
     const bad = join(tmpdir(), "blastcheck-no-such-dir-xyz", "scorecard.json");
     await expect(main(argv("run", "--baseline", "abc", "--out", bad))).resolves.toBe(EXIT.FAIL);
+  });
+
+  it("init invokes the installer and exits 0", async () => {
+    runInitMock.mockResolvedValue({ added: 3, settingsPath: ".claude/settings.json" });
+    await expect(main(argv("init"))).resolves.toBe(EXIT.OK);
+    expect(runInitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("hook stop maps the hook's exit code through to the process", async () => {
+    runStopMock.mockResolvedValue(EXIT.FAIL);
+    await expect(main(argv("hook", "stop"))).resolves.toBe(EXIT.FAIL);
+    expect(runStopMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("hook stop forwards the parsed stdin payload and its cwd", async () => {
+    readStdinMock.mockResolvedValue(JSON.stringify({ cwd: "/work", stop_hook_active: false }));
+    runStopMock.mockResolvedValue(EXIT.OK);
+    await main(argv("hook", "stop"));
+    expect(runStopMock).toHaveBeenCalledWith({ cwd: "/work", stop_hook_active: false }, "/work");
+  });
+
+  it("hook session-start / post-tool-use invoke their handlers and exit 0", async () => {
+    runSessionStartMock.mockResolvedValue(undefined);
+    runPostToolUseMock.mockResolvedValue(undefined);
+    await expect(main(argv("hook", "session-start"))).resolves.toBe(EXIT.OK);
+    await expect(main(argv("hook", "post-tool-use"))).resolves.toBe(EXIT.OK);
+    expect(runSessionStartMock).toHaveBeenCalledTimes(1);
+    expect(runPostToolUseMock).toHaveBeenCalledTimes(1);
   });
 });
