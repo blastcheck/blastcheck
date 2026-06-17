@@ -1,7 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { runChecks } from "../runner.js";
-import type { CheckContext, Contract, DiffEntry } from "../types.js";
+import { loadTrajectory } from "../trajectory/loader.js";
+import type {
+  CheckContext,
+  Contract,
+  DiffEntry,
+  TrajectoryEvent,
+  TrajectoryLoadResult,
+} from "../types.js";
 import { check } from "./denied-files.js";
+
+const FIXTURES = `${process.cwd()}/tests/fixtures/trajectories`;
+
+function traj(events: TrajectoryEvent[]): TrajectoryLoadResult {
+  return {
+    events,
+    diagnostics: [],
+    coverage: {
+      totalLines: events.length,
+      acceptedLines: events.length,
+      rejectedLines: 0,
+      hasStep: true,
+      hasExitCode: events.some((e) => e.exitCode !== undefined),
+      hasTimestamps: false,
+      hasStdoutTail: false,
+      missingFields: [],
+    },
+  };
+}
 
 function contract(over: Partial<Contract> = {}): Contract {
   return {
@@ -72,5 +98,64 @@ describe("denied-files", () => {
     expect(results[0]?.status).toBe("skipped");
     expect(results[0]?.reason).toContain("diff");
     expect(evidenceLevel.checks["denied-files"]).toBe("skipped");
+  });
+
+  // --- Bash part of the gate (Story 2.2) -----------------------------------
+
+  const denyCtx = (over: Partial<Contract> = {}): Contract =>
+    contract({ deny: ["**/.env*", "migrations/**", "**/secrets*"], allow: ["src/**"], ...over });
+
+  it("fails on destructive shell ops over deny paths (Bash violation)", async () => {
+    const trajectory = await loadTrajectory(
+      `${FIXTURES}/denied-files__bash-hits-deny.trajectory.jsonl`,
+    );
+    // Clean git diff: every hit comes from the Bash part.
+    const ctx: CheckContext = { contract: denyCtx(), diff: diff("src/app.ts"), trajectory };
+
+    const result = check.run(ctx);
+
+    expect(result.status).toBe("fail");
+    expect(result.findings.every((f) => f.severity === "high")).toBe(true);
+    const paths = result.findings.map((f) => f.path);
+    expect(paths).toContain(".env"); // rm .env
+    expect(paths).toContain("config/.env.local"); // > redirect
+    expect(paths).toContain("migrations/001_init.sql"); // chmod
+    expect(paths).toContain("secrets.json"); // mv source
+    // `rm src/app.ts` (allowed) and `cat package.json` (recon) are NOT hits.
+    expect(paths).not.toContain("src/app.ts");
+  });
+
+  it("passes when destructive shell ops target only allowed paths (Bash clean)", async () => {
+    const trajectory = await loadTrajectory(
+      `${FIXTURES}/denied-files__bash-clean.trajectory.jsonl`,
+    );
+    const ctx: CheckContext = { contract: denyCtx(), diff: diff("src/x.ts"), trajectory };
+
+    const result = check.run(ctx);
+
+    expect(result.status).toBe("pass");
+    expect(result.findings).toEqual([]);
+  });
+
+  it("merges git and Bash hits into a single failing result", () => {
+    const ctx: CheckContext = {
+      contract: denyCtx(),
+      diff: diff("migrations/002.sql"), // git-part hit
+      trajectory: traj([{ tool: "Bash", args: { cmd: "rm .env" }, step: 1, exitCode: 0 }]), // bash hit
+    };
+
+    const result = check.run(ctx);
+
+    expect(result.status).toBe("fail");
+    expect(result.findings.map((f) => f.path).sort()).toEqual([".env", "migrations/002.sql"]);
+  });
+
+  it("ignores the Bash part entirely when no trajectory is present (git part only)", () => {
+    const ctx: CheckContext = { contract: denyCtx(), diff: diff("src/app.ts") };
+
+    const result = check.run(ctx);
+
+    expect(result.status).toBe("pass");
+    expect(result.findings).toEqual([]);
   });
 });

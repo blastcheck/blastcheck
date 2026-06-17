@@ -1,0 +1,5 @@
+{"tool":"Read","args":{"path":"src/a.ts"},"step":1}
+{"tool":"Edit","args":{"path":"src/b.ts"},"step":2,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"npm test"},"step":3,"exit_code":0}
+{"tool":"Edit","args":{"path":"src/c.ts"},"step":4,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"git status"},"step":5,"exit_code":0}

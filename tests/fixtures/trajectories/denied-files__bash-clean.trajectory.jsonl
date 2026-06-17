@@ -1,0 +1,4 @@
+{"tool":"Bash","args":{"cmd":"rm src/old.ts"},"step":1,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"mv src/a.ts src/b.ts"},"step":2,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"echo done > build/out.txt"},"step":3,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"cat package.json"},"step":4,"exit_code":0}

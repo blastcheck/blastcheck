@@ -66,15 +66,16 @@ describe("runAudit (git-only E2E)", () => {
     expect(sc.head_sha).toMatch(/^[0-9a-f]{40}$/);
     expect(sc.task_goal).toBe("implement the feature");
 
-    // The three git-only checks ran (`full`). The trajectory checks are NOT
-    // registered in v1 (Story 2.2 adds them), so they are absent from the
-    // profile entirely — the honest "no trajectory analysed" signal is the
-    // `trajectory: 'absent'` flag above, not a per-check `skipped` entry.
+    // The three git-only checks ran (`full`). The trajectory checks are now
+    // registered (Story 2.2), so in a git-only run the runner's requires-gating
+    // marks them `skipped` — the honest "registered but no trajectory to analyse"
+    // signal, alongside the `trajectory: 'absent'` flag above.
     expect(sc.evidence_level.checks["denied-files"]).toBe("full");
     expect(sc.evidence_level.checks["scope-adhesion"]).toBe("full");
     expect(sc.evidence_level.checks.churn).toBe("full");
-    expect(sc.evidence_level.checks["required-checks"]).toBeUndefined();
-    expect(sc.evidence_level.checks["loop-detection"]).toBeUndefined();
+    expect(sc.evidence_level.checks["extraneous-tool-calls"]).toBe("skipped");
+    expect(sc.evidence_level.checks["required-checks"]).toBe("skipped");
+    expect(sc.evidence_level.checks["loop-detection"]).toBe("skipped");
 
     expect(sc.gates).toEqual({ "denied-files": "pass" });
   });
@@ -105,8 +106,10 @@ describe("runAudit (git-only E2E)", () => {
 
     expect(scorecardSchema.safeParse(sc).success).toBe(true);
     expect(sc.evidence_level.trajectory).toBe("present");
-    expect(sc.evidence_level.checks["required-checks"]).toBeUndefined();
-    expect(sc.evidence_level.checks["loop-detection"]).toBeUndefined();
+    // With a usable trajectory the trajectory checks actually run (`full`).
+    expect(sc.evidence_level.checks["extraneous-tool-calls"]).toBe("full");
+    expect(sc.evidence_level.checks["required-checks"]).toBe("full");
+    expect(sc.evidence_level.checks["loop-detection"]).toBe("full");
   });
 
   it("keeps trajectory evidence absent when the file has no usable events", async () => {

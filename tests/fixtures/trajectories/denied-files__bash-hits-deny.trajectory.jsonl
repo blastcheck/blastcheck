@@ -1,0 +1,6 @@
+{"tool":"Bash","args":{"cmd":"rm -rf .env"},"step":1,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"echo SECRET=1 > config/.env.local"},"step":2,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"chmod 600 migrations/001_init.sql"},"step":3,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"mv secrets.json /tmp/backup"},"step":4,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"rm src/app.ts"},"step":5,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"cat package.json"},"step":6,"exit_code":0}

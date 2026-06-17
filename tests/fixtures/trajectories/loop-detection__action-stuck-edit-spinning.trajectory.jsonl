@@ -1,0 +1,11 @@
+{"tool":"Edit","args":{"path":"src/a.ts"},"step":1,"exit_code":0}
+{"tool":"Edit","args":{"path":"src/a.ts"},"step":2,"exit_code":0}
+{"tool":"Edit","args":{"path":"src/a.ts"},"step":3,"exit_code":0}
+{"tool":"Edit","args":{"path":"src/a.ts"},"step":4,"exit_code":0}
+{"tool":"Edit","args":{"path":"src/a.ts"},"step":5,"exit_code":0}
+{"tool":"Edit","args":{"path":"src/a.ts"},"step":6,"exit_code":0}
+{"tool":"Bash","args":{"cmd":"npm test"},"step":7,"exit_code":1}
+{"tool":"Bash","args":{"cmd":"npm test"},"step":8,"exit_code":1}
+{"tool":"Bash","args":{"cmd":"npm test"},"step":9,"exit_code":1}
+{"tool":"Bash","args":{"cmd":"npm test"},"step":10,"exit_code":1}
+{"tool":"Bash","args":{"cmd":"npm test"},"step":11,"exit_code":1}
