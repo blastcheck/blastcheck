@@ -203,4 +203,33 @@ describe("cli main", () => {
     expect(runSessionStartMock).toHaveBeenCalledTimes(1);
     expect(runPostToolUseMock).toHaveBeenCalledTimes(1);
   });
+
+  // `adapt` runs the real adapter registry (not mocked) — it never touches runAudit.
+  const codexFixture = join(
+    process.cwd(),
+    "tests/fixtures/trajectories/codex-rollout.sample.jsonl",
+  );
+
+  it("adapt --from codex writes common jsonl to stdout and exits 0", async () => {
+    await expect(main(argv("adapt", "--from", "codex", codexFixture))).resolves.toBe(EXIT.OK);
+    const out = stdout.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toContain('"tool":"shell"');
+    expect(out).toContain('"cmd":"git status"');
+    // honest degradation: snake_case external contract, one event per line
+    expect(out.trim().split("\n").length).toBe(3);
+    expect(runAuditMock).not.toHaveBeenCalled();
+  });
+
+  it("adapt with an unknown --from exits 2 and writes nothing to stdout", async () => {
+    await expect(main(argv("adapt", "--from", "bogus", codexFixture))).resolves.toBe(
+      EXIT.TOOL_ERROR,
+    );
+    const out = stdout.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toBe("");
+  });
+
+  it("adapt on an unreadable log file exits 2 (file-level read error)", async () => {
+    const missing = join(tmpdir(), "blastcheck-no-such-log-xyz.jsonl");
+    await expect(main(argv("adapt", "--from", "codex", missing))).resolves.toBe(EXIT.TOOL_ERROR);
+  });
 });

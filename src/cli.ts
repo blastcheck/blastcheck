@@ -12,7 +12,7 @@
  */
 
 import { realpathSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import { runInit } from "./hooks/init.js";
@@ -24,6 +24,8 @@ import { runAudit } from "./index.js";
 import { log, setVerbose } from "./log.js";
 import { renderPrComment } from "./scorecard/markdown.js";
 import { printScorecard } from "./scorecard/print.js";
+import { adaptLogToJsonl } from "./trajectory/adapters/adapt.js";
+import { isTrajectoryFormat, TRAJECTORY_FORMATS } from "./trajectory/adapters/index.js";
 import { EXIT, type ExitCode } from "./types.js";
 
 const VERSION = "0.1.0";
@@ -113,6 +115,42 @@ export function buildProgram(outcome: Outcome): Command {
           );
         }
       }
+    });
+
+  // Cross-agent adapters (Story 4.1): convert a native Codex/Cursor/Aider log
+  // into the common trajectory JSONL on stdout. A separate transformation
+  // utility — NOT part of the audit path (AR9): the user pipes its output into
+  // `run --trajectory`. Diagnostics/errors go to stderr; the common jsonl is the
+  // only thing on stdout.
+  program
+    .command("adapt")
+    .description("Convert a native agent log to the common trajectory.jsonl (stdout).")
+    .requiredOption("--from <format>", `native log format: ${TRAJECTORY_FORMATS.join(" | ")}`)
+    .argument("<log-path>", "path to the native agent log file")
+    .option("-v, --verbose", "verbose (debug) logging to stderr")
+    .action(async (logPath: string, opts: { from: string; verbose?: boolean }) => {
+      setVerbose(Boolean(opts.verbose));
+
+      if (!isTrajectoryFormat(opts.from)) {
+        log(
+          "error",
+          `unknown --from '${opts.from}'; expected one of: ${TRAJECTORY_FORMATS.join(", ")}`,
+        );
+        outcome.code = EXIT.TOOL_ERROR;
+        return;
+      }
+
+      // A file-level read error throws → caught in `main` → exit 2 (like the
+      // loader). Per-record problems are degraded to stderr inside the adapter.
+      const raw = await readFile(logPath, "utf8");
+      const jsonl = adaptLogToJsonl(opts.from, raw);
+      process.stdout.write(jsonl);
+      // Empty stdout is a successful-but-empty conversion (no tool calls in the
+      // log). Surface it on stderr so it's not mistaken for a normal conversion.
+      if (jsonl === "") {
+        log("warn", `adapt: no events extracted from ${logPath} (0 tool calls) — output is empty`);
+      }
+      outcome.code = EXIT.OK;
     });
 
   // Distribution target #2 (Story 3.1): install the Claude Code hooks.

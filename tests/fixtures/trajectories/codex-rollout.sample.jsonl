@@ -1,0 +1,8 @@
+{"timestamp":"2026-06-18T10:00:00Z","type":"session_meta","payload":{"type":"session_meta","id":"sess_1"}}
+{"timestamp":"2026-06-18T10:00:01Z","type":"response_item","payload":{"type":"function_call","name":"local_shell","arguments":"{\"command\":[\"bash\",\"-lc\",\"git status\"]}","call_id":"call_1"}}
+{"timestamp":"2026-06-18T10:00:02Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"{\"output\":\"On branch main\",\"metadata\":{\"exit_code\":0}}"}}
+{"timestamp":"2026-06-18T10:00:03Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"command\":\"rm .env\"}","call_id":"call_2"}}
+{"timestamp":"2026-06-18T10:00:04Z","type":"response_item","payload":{"type":"function_call","name":"apply_patch","arguments":"{\"input\":\"*** Begin Patch\\n*** Update File: src/app.ts\\n@@\\n-old\\n+new\\n*** End Patch\"}","call_id":"call_3"}}
+{"timestamp":"2026-06-18T10:00:05Z","type":"event_msg","payload":{"type":"token_count","input":10}}
+{"timestamp":"2026-06-18T10:00:06Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_3","output":"Success. Updated src/app.ts"}}
+{"timestamp":"2026-06-18T10:00:07Z", broken json line here

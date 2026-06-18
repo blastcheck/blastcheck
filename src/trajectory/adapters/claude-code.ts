@@ -1,41 +1,25 @@
-type ExternalTrajectoryEvent = {
-  tool: string;
-  args: Record<string, unknown>;
-  step: number;
-  ts?: string;
-  exit_code?: number;
-  stdout_tail?: string;
-  stderr_tail?: string;
-};
+/**
+ * `claude-code` adapter — the reference adapter and shape of the external
+ * contract. A pure function that normalizes a Claude Code `PostToolUse` payload
+ * (one event or an array) into {@link ExternalTrajectoryEvent}s.
+ *
+ * Shared helpers and the external type now live in `common.ts` (AC7); this file
+ * keeps only the Claude-Code-specific extraction. Its export
+ * {@link adaptClaudeCodePostToolUse} is called per-event by the hook
+ * (`src/hooks/post-tool-use.ts`) — signature and behavior are unchanged by the
+ * refactor.
+ */
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
+import {
+  asRecord,
+  type ExternalTrajectoryEvent,
+  externalEvent,
+  firstNumber,
+  firstString,
+  tail,
+} from "./common.js";
 
-function firstString(record: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string") return value;
-  }
-  return undefined;
-}
-
-function firstNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
-}
-
-function tail(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const lines = value.split(/\r?\n/);
-  return lines.slice(-20).join("\n");
-}
-
+/** Strip the raw tool-input keys we re-expose as canonical `path`/`cmd`. */
 function externalArgs(rawArgs: Record<string, unknown>): Record<string, unknown> {
   const args: Record<string, unknown> = { ...rawArgs };
   for (const key of ["file_path", "filePath", "command"]) delete args[key];
@@ -83,15 +67,12 @@ function adaptOne(input: unknown, step: number): ExternalTrajectoryEvent | undef
   if (path !== undefined) args.path = path;
   if (cmd !== undefined) args.cmd = cmd;
 
-  return {
-    tool,
-    args,
-    step: firstNumber(record, ["step"]) ?? step,
-    ...(ts !== undefined ? { ts } : {}),
-    ...(exitCode !== undefined ? { exit_code: exitCode } : {}),
-    ...(stdoutTail !== undefined ? { stdout_tail: stdoutTail } : {}),
-    ...(stderrTail !== undefined ? { stderr_tail: stderrTail } : {}),
-  };
+  return externalEvent(tool, args, firstNumber(record, ["step"]) ?? step, {
+    ts,
+    exitCode,
+    stdoutTail,
+    stderrTail,
+  });
 }
 
 export function adaptClaudeCodePostToolUse(input: unknown): ExternalTrajectoryEvent[] {
