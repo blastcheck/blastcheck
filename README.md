@@ -3,16 +3,17 @@
 Audit AI coding-agent changes against a contract — git-only and trajectory checks.
 
 `blastcheck` inspects what an AI coding agent actually changed (the git diff and,
-later, its execution trajectory) and grades it against a declared contract: which
-files may be touched, how much churn is acceptable, whether required checks ran,
-and more. The verdict is a machine-readable scorecard plus a process exit code,
-so it slots into pre-commit hooks and CI gates.
+optionally, its execution trajectory) and grades it against a declared contract:
+which files may be touched, how much churn is acceptable, whether required checks
+ran, and more. The verdict is a machine-readable scorecard plus a process exit
+code, so it slots into hooks and CI gates.
 
-> **Status: v1 in progress.** The git-only checks (`denied-files`,
-> `scope-adhesion`, `churn`), the trajectory checks, the audit runner, the
-> `scorecard.json` output, the Claude Code hooks installer (`blastcheck init`),
-> and the composite GitHub Action are implemented. `runAudit` produces a real
-> verdict; the remaining work is cross-agent trajectory adapters (Epic 4).
+> **Status: v1 implemented for local use and CI.** The git-only checks, trajectory
+> checks, audit runner, `scorecard.json` output, Claude Code hooks installer,
+> cross-agent trajectory adapters, and composite GitHub Action are implemented.
+> The main remaining integration gap is a one-command Codex installer: Codex logs
+> can be adapted and audited today, but `blastcheck init` does not yet install
+> Codex-specific hooks or automatically discover Codex rollout files.
 
 ## Checks
 
@@ -63,6 +64,32 @@ blastcheck init
 `stdout` is reserved for the `scorecard.json`; all diagnostics (and the
 human-readable summary) go to `stderr`. `--out` and `--comment` are optional side
 channels — a write failure on either is logged but never changes the exit code.
+
+## Agent integration status
+
+| Agent / surface | Status | How to use it |
+| --------------- | ------ | ------------- |
+| Claude Code | Plug-and-play local hooks | `blastcheck init` installs `SessionStart`, `PostToolUse`, and `Stop` hooks for trajectory capture and audit. |
+| GitHub Actions | Plug-and-play CI gate | Use the composite Action from this repository in a PR workflow. |
+| Codex | Adapter ready, installer missing | Convert a Codex rollout/log with `blastcheck adapt --from codex <log>`, then pass the output to `blastcheck run --trajectory`. |
+| Cursor | Adapter ready, installer missing | Convert a Cursor stream/log with `blastcheck adapt --from cursor <log>`, then audit the generated trajectory. |
+| Aider | Adapter ready, installer missing | Convert `.aider.chat.history.md` with `blastcheck adapt --from aider <log>`, then audit the generated trajectory. |
+
+### Codex today
+
+Codex support is available as a log adapter, not as a BMad-style one-command
+installation. The current flow is:
+
+```bash
+blastcheck adapt --from codex codex-rollout.jsonl > trajectory.jsonl
+blastcheck run --baseline <sha> --trajectory trajectory.jsonl
+```
+
+That enables the same trajectory checks as other agents once you have the Codex
+log file. What is not implemented yet: `blastcheck init --agent codex` or equivalent
+setup that wires blastcheck directly into Codex, finds the active rollout file,
+captures a baseline, and runs the audit automatically at the end of a Codex
+session.
 
 ### Exit codes
 

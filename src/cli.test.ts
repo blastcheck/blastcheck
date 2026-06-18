@@ -9,18 +9,29 @@ import type { Scorecard } from "./scorecard/schema.js";
 const { runAuditMock } = vi.hoisted(() => ({ runAuditMock: vi.fn() }));
 vi.mock("./index.js", () => ({ runAudit: runAuditMock }));
 
-// The `init` / `hook` subcommands are wiring-only at the CLI layer; their
+// The `init` subcommand is registry-routing only at the CLI layer; integration
+// behavior is covered by integration-specific tests. Here we mock the registry
+// so the CLI test stays a pure arg-parsing/exit-code check.
+const { getIntegrationMock, installMock } = vi.hoisted(() => ({
+  getIntegrationMock: vi.fn(),
+  installMock: vi.fn(),
+}));
+vi.mock("./integrations/registry.js", () => ({
+  getIntegration: getIntegrationMock,
+  isAgentId: (value: unknown) =>
+    ["claude-code", "codex", "opencode", "github"].includes(String(value)),
+  supportedAgentsForMessage: () => "claude-code, codex, opencode, github",
+}));
+
+// The `hook` subcommands are wiring-only at the CLI layer; their
 // behavior is covered by the hooks' own tests. Here we mock them so the CLI test
 // stays a pure arg-parsing/exit-code check and never blocks on real stdin.
-const { runInitMock, runStopMock, runSessionStartMock, runPostToolUseMock, readStdinMock } =
-  vi.hoisted(() => ({
-    runInitMock: vi.fn(),
-    runStopMock: vi.fn(),
-    runSessionStartMock: vi.fn(),
-    runPostToolUseMock: vi.fn(),
-    readStdinMock: vi.fn(),
-  }));
-vi.mock("./hooks/init.js", () => ({ runInit: runInitMock }));
+const { runStopMock, runSessionStartMock, runPostToolUseMock, readStdinMock } = vi.hoisted(() => ({
+  runStopMock: vi.fn(),
+  runSessionStartMock: vi.fn(),
+  runPostToolUseMock: vi.fn(),
+  readStdinMock: vi.fn(),
+}));
 vi.mock("./hooks/stop.js", () => ({ runStop: runStopMock }));
 vi.mock("./hooks/session-start.js", () => ({ runSessionStart: runSessionStartMock }));
 vi.mock("./hooks/post-tool-use.js", () => ({ runPostToolUse: runPostToolUseMock }));
@@ -60,7 +71,15 @@ describe("cli main", () => {
 
   beforeEach(() => {
     runAuditMock.mockReset();
-    for (const m of [runInitMock, runStopMock, runSessionStartMock, runPostToolUseMock]) {
+    getIntegrationMock.mockReset();
+    installMock.mockReset();
+    getIntegrationMock.mockImplementation((id: string) => ({
+      id,
+      displayName: id,
+      install: installMock,
+    }));
+    installMock.mockResolvedValue({ agent: "claude-code" });
+    for (const m of [runStopMock, runSessionStartMock, runPostToolUseMock]) {
       m.mockReset();
     }
     readStdinMock.mockReset();
@@ -176,10 +195,33 @@ describe("cli main", () => {
     await expect(main(argv("run", "--baseline", "abc", "--comment", bad))).resolves.toBe(EXIT.FAIL);
   });
 
-  it("init invokes the installer and exits 0", async () => {
-    runInitMock.mockResolvedValue({ added: 3, settingsPath: ".claude/settings.json" });
+  it("init routes to the default claude-code integration and exits 0", async () => {
     await expect(main(argv("init"))).resolves.toBe(EXIT.OK);
-    expect(runInitMock).toHaveBeenCalledTimes(1);
+    expect(getIntegrationMock).toHaveBeenCalledWith("claude-code");
+    expect(installMock).toHaveBeenCalledWith({ cwd: process.cwd() });
+  });
+
+  it("init --agent claude-code routes to the claude-code integration", async () => {
+    await expect(main(argv("init", "--agent", "claude-code"))).resolves.toBe(EXIT.OK);
+    expect(getIntegrationMock).toHaveBeenCalledWith("claude-code");
+    expect(installMock).toHaveBeenCalledWith({ cwd: process.cwd() });
+  });
+
+  it("init --agent unknown exits 2, calls no installer, and writes nothing to stdout", async () => {
+    await expect(main(argv("init", "--agent", "unknown"))).resolves.toBe(EXIT.TOOL_ERROR);
+    expect(getIntegrationMock).not.toHaveBeenCalled();
+    expect(installMock).not.toHaveBeenCalled();
+    const out = stdout.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toBe("");
+  });
+
+  it("init --agent codex resolves the registry entry and exits 2 until implemented", async () => {
+    installMock.mockRejectedValue(new Error("codex installer is not implemented yet"));
+    await expect(main(argv("init", "--agent", "codex"))).resolves.toBe(EXIT.TOOL_ERROR);
+    expect(getIntegrationMock).toHaveBeenCalledWith("codex");
+    expect(installMock).toHaveBeenCalledWith({ cwd: process.cwd() });
+    const out = stdout.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toBe("");
   });
 
   it("hook stop maps the hook's exit code through to the process", async () => {

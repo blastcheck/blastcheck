@@ -15,12 +15,12 @@ import { realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import { runInit } from "./hooks/init.js";
 import { runPostToolUse } from "./hooks/post-tool-use.js";
 import { runSessionStart } from "./hooks/session-start.js";
 import { parseHookPayload, readStdin } from "./hooks/state.js";
 import { runStop } from "./hooks/stop.js";
 import { runAudit } from "./index.js";
+import { getIntegration, isAgentId, supportedAgentsForMessage } from "./integrations/registry.js";
 import { log, setVerbose } from "./log.js";
 import { renderPrComment } from "./scorecard/markdown.js";
 import { printScorecard } from "./scorecard/print.js";
@@ -37,6 +37,11 @@ interface RunOptions {
   out?: string;
   comment?: string;
   trajectory?: string;
+  verbose?: boolean;
+}
+
+interface InitOptions {
+  agent?: string;
   verbose?: boolean;
 }
 
@@ -153,14 +158,23 @@ export function buildProgram(outcome: Outcome): Command {
       outcome.code = EXIT.OK;
     });
 
-  // Distribution target #2 (Story 3.1): install the Claude Code hooks.
+  // Installer-first entrypoint: route selected agents through the shared
+  // integration registry. No --agent preserves existing Claude Code behavior.
   program
     .command("init")
-    .description("Install Claude Code hooks (trajectory capture + audit on Stop).")
+    .description("Install blastcheck for a supported agent integration.")
+    .option("--agent <agent>", `agent integration: ${supportedAgentsForMessage()}`)
     .option("-v, --verbose", "verbose (debug) logging to stderr")
-    .action(async (opts: { verbose?: boolean }) => {
+    .action(async (opts: InitOptions) => {
       setVerbose(Boolean(opts.verbose));
-      await runInit({ cwd: process.cwd() });
+      const agent = opts.agent ?? "claude-code";
+      if (!isAgentId(agent)) {
+        log("error", `unknown agent '${agent}'; supported agents: ${supportedAgentsForMessage()}`);
+        outcome.code = EXIT.TOOL_ERROR;
+        return;
+      }
+      const integration = getIntegration(agent);
+      await integration.install({ cwd: process.cwd() });
     });
 
   // Hidden hook entrypoints invoked BY the installed hooks — they read the
