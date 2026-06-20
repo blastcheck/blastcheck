@@ -23,6 +23,18 @@ vi.mock("./integrations/registry.js", () => ({
   supportedAgentsForMessage: () => "claude-code, codex, opencode, github",
 }));
 
+// The `status` subcommand is wiring-only at the CLI layer; the readiness
+// snapshot logic is covered by `status.test.ts`. Mock the module so the CLI
+// test stays a pure stdout-clean / exit-code / routing check.
+const { buildReadinessSnapshotMock, printReadinessMock } = vi.hoisted(() => ({
+  buildReadinessSnapshotMock: vi.fn(),
+  printReadinessMock: vi.fn(),
+}));
+vi.mock("./integrations/status.js", () => ({
+  buildReadinessSnapshot: buildReadinessSnapshotMock,
+  printReadiness: printReadinessMock,
+}));
+
 // The `hook` subcommands are wiring-only at the CLI layer; their
 // behavior is covered by the hooks' own tests. Here we mock them so the CLI test
 // stays a pure arg-parsing/exit-code check and never blocks on real stdin.
@@ -79,6 +91,15 @@ describe("cli main", () => {
       install: installMock,
     }));
     installMock.mockResolvedValue({ agent: "claude-code" });
+    buildReadinessSnapshotMock.mockReset();
+    printReadinessMock.mockReset();
+    buildReadinessSnapshotMock.mockResolvedValue({
+      integrations: [],
+      trajectoryPresent: false,
+      baselinePresent: false,
+      warnings: [],
+      supportedAgents: "claude-code, codex, opencode, github",
+    });
     for (const m of [runStopMock, runSessionStartMock, runPostToolUseMock]) {
       m.mockReset();
     }
@@ -226,6 +247,44 @@ describe("cli main", () => {
     expect(installMock).toHaveBeenCalledWith({ cwd: process.cwd() });
     const out = stdout.mock.calls.map((c) => String(c[0])).join("");
     expect(out).toBe("");
+  });
+
+  it("status routes through the status module, exits 0, and writes nothing to stdout", async () => {
+    buildReadinessSnapshotMock.mockResolvedValue({
+      integrations: [
+        {
+          agent: "claude-code",
+          displayName: "Claude Code",
+          configFiles: [{ path: ".gitignore", present: true }],
+          trust: "trusted",
+          evidence: "full",
+          actionNeeded: "—",
+        },
+      ],
+      trajectoryPresent: true,
+      baselinePresent: true,
+      warnings: [],
+      supportedAgents: "claude-code, codex, opencode, github",
+    });
+    await expect(main(argv("status"))).resolves.toBe(EXIT.OK);
+    expect(buildReadinessSnapshotMock).toHaveBeenCalledWith(process.cwd());
+    expect(printReadinessMock).toHaveBeenCalledTimes(1);
+    const out = stdout.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toBe("");
+  });
+
+  it("status on an empty manifest still exits 0 and writes nothing to stdout", async () => {
+    // beforeEach default: empty integrations. The read-only command never fails.
+    await expect(main(argv("status"))).resolves.toBe(EXIT.OK);
+    expect(buildReadinessSnapshotMock).toHaveBeenCalledTimes(1);
+    const out = stdout.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toBe("");
+  });
+
+  it("status never invokes an integration install() (read-only)", async () => {
+    await expect(main(argv("status"))).resolves.toBe(EXIT.OK);
+    expect(installMock).not.toHaveBeenCalled();
+    expect(getIntegrationMock).not.toHaveBeenCalled();
   });
 
   it("hook stop maps the hook's exit code through to the process", async () => {

@@ -21,6 +21,7 @@ import { parseHookPayload, readStdin } from "./hooks/state.js";
 import { runStop } from "./hooks/stop.js";
 import { runAudit } from "./index.js";
 import { getIntegration, isAgentId, supportedAgentsForMessage } from "./integrations/registry.js";
+import { buildReadinessSnapshot, printReadiness } from "./integrations/status.js";
 import { log, setVerbose } from "./log.js";
 import { renderPrComment } from "./scorecard/markdown.js";
 import { printScorecard } from "./scorecard/print.js";
@@ -175,6 +176,23 @@ export function buildProgram(outcome: Outcome): Command {
       }
       const integration = getIntegration(agent);
       await integration.install({ cwd: process.cwd() });
+    });
+
+  // Read-only readiness report (Story 1.4): is blastcheck actually connected
+  // here? Reads the manifest + `.blastcheck/` evidence and prints a concise
+  // summary to STDERR only — stdout stays empty so it never collides with the
+  // scorecard JSON contract other commands emit (NFR5). Missing binaries/config
+  // are warnings, not failures, so it always exits 0 (FR41); only an unexpected
+  // exception bubbling to `main` becomes a tool error (exit 2).
+  program
+    .command("status")
+    .description("Report installed integrations, evidence, and readiness (stderr).")
+    .option("-v, --verbose", "verbose (debug) logging to stderr")
+    .action(async (opts: { verbose?: boolean }) => {
+      setVerbose(Boolean(opts.verbose));
+      const snapshot = await buildReadinessSnapshot(process.cwd());
+      printReadiness(snapshot);
+      outcome.code = EXIT.OK;
     });
 
   // Hidden hook entrypoints invoked BY the installed hooks — they read the
