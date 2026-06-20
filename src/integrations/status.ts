@@ -105,7 +105,14 @@ function computeAction(opts: {
   hasMissingConfig: boolean;
   evidence: EvidenceState;
 }): string {
-  if (opts.trust === "needs-review") return `run trust review for ${opts.agent}`;
+  // A `needs-review` integration is installed but untrusted: the user must
+  // review/trust the hooks in the agent. Codex does this via its `/hooks`
+  // command (UX-DR4); other agents get a generic trust-review prompt.
+  if (opts.trust === "needs-review") {
+    return opts.agent === "codex"
+      ? "review hooks in Codex `/hooks`"
+      : `run trust review for ${opts.agent}`;
+  }
   if (opts.hasMissingConfig) return `re-run \`blastcheck init --agent ${opts.agent}\``;
   if (opts.evidence === "pending") return "run your agent once to capture a trajectory";
   return "—";

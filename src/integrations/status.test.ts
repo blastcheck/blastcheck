@@ -140,16 +140,35 @@ describe("status readiness snapshot", () => {
     expect(snapshot.warnings.some((w) => w.includes(".gitignore"))).toBe(true);
   });
 
-  it("surfaces a 'run trust review' action for a needs-review entry", async () => {
+  it("points a needs-review Codex entry at the `/hooks` trust review (UX-DR4)", async () => {
     await writeManifest({
       agent: "codex",
       display_name: "Codex",
+      config_files: [".codex/hooks.json"],
+      trust: "needs-review",
+    });
+    await mkdir(join(dir, ".codex"), { recursive: true });
+    await writeFile(join(dir, ".codex", "hooks.json"), "{}", "utf8");
+
+    const snapshot = await buildReadinessSnapshot(dir);
+    const codex = snapshot.integrations[0];
+    // Installed but NOT fully ready: explicit trust state, never plain "ready".
+    expect(codex.trust).toBe("needs-review");
+    expect(codex.evidence).not.toBe("full");
+    expect(codex.actionNeeded).toBe("review hooks in Codex `/hooks`");
+    // A needs-review integration is a warning state, not a failure.
+    expect(snapshot.warnings).toEqual([]);
+  });
+
+  it("keeps a generic trust-review action for a non-Codex needs-review entry", async () => {
+    await writeManifest({
+      agent: "opencode",
+      display_name: "OpenCode",
       config_files: [],
       trust: "needs-review",
     });
     const snapshot = await buildReadinessSnapshot(dir);
-    expect(snapshot.integrations[0].trust).toBe("needs-review");
-    expect(snapshot.integrations[0].actionNeeded).toBe("run trust review for codex");
+    expect(snapshot.integrations[0].actionNeeded).toBe("run trust review for opencode");
   });
 
   it("degrades a present-but-malformed scorecard to a warning without throwing", async () => {

@@ -273,6 +273,30 @@ describe("cli main", () => {
     expect(out).toBe("");
   });
 
+  it("status with a needs-review codex entry still exits 0 and writes nothing to stdout", async () => {
+    // A needs-review integration is a warning state, not a failure (FR41): the
+    // read-only command stays exit 0 with a clean stdout regardless of trust.
+    buildReadinessSnapshotMock.mockResolvedValue({
+      integrations: [
+        {
+          agent: "codex",
+          displayName: "Codex",
+          configFiles: [{ path: ".codex/hooks.json", present: true }],
+          trust: "needs-review",
+          evidence: "pending",
+          actionNeeded: "review hooks in Codex `/hooks`",
+        },
+      ],
+      trajectoryPresent: false,
+      baselinePresent: false,
+      warnings: [],
+      supportedAgents: "claude-code, codex, opencode, github",
+    });
+    await expect(main(argv("status"))).resolves.toBe(EXIT.OK);
+    const out = stdout.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toBe("");
+  });
+
   it("status on an empty manifest still exits 0 and writes nothing to stdout", async () => {
     // beforeEach default: empty integrations. The read-only command never fails.
     await expect(main(argv("status"))).resolves.toBe(EXIT.OK);
