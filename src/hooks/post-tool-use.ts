@@ -65,6 +65,20 @@ export async function runCodexPostToolUse(payload: unknown, cwd: string): Promis
   return runPostToolUse(payload, cwd, adaptCodexPostToolUse);
 }
 
+/**
+ * OpenCode `PostToolUse` handler. Unlike Codex it injects NO custom adapter: the
+ * generated OpenCode plugin pre-shapes each `tool.execute.after` event into the
+ * Claude-compatible `{ tool_name, tool_input, tool_response }` payload before it
+ * reaches stdin, so the DEFAULT `adaptClaudeCodePostToolUse` already normalizes
+ * it to a canonical line (FR38) — no `src/trajectory/` OpenCode adapter is needed
+ * here (FR35's dedicated adapter stays conditional, owned by Story 3.3). Sharing
+ * the record+pin path keeps the canonical `.blastcheck/` evidence agent-agnostic
+ * (FR23/FR51).
+ */
+export async function runOpencodePostToolUse(payload: unknown, cwd: string): Promise<void> {
+  return runPostToolUse(payload, cwd);
+}
+
 async function recordEvents(
   payload: unknown,
   cwd: string,

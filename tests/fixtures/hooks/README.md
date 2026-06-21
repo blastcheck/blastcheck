@@ -13,6 +13,37 @@ Codex hook handlers are tested against.
 | `codex-post-tool-use-apply-patch.sample.json` | `PostToolUse` | `apply_patch` body → canonical `path` |
 | `codex-stop.sample.json` | `Stop` | `stop_hook_active`, `last_assistant_message` |
 
+## OpenCode `tool.execute.after` fixtures (Story 3.2, FR33/FR34/FR38)
+
+Unlike the Codex files above, the `opencode-tool-execute-after*.sample.json`
+fixtures are the **native OpenCode `tool.execute.after` `(input, output)` shape**
+— NOT a ready-to-pipe stdin payload. The generated plugin
+(`.opencode/plugins/blastcheck.ts`) maps each native event into the
+Claude-compatible `PostToolUse` payload (`{ tool_name: input.tool, tool_input:
+output.args, tool_response: { stdout: output.output, ...output.metadata } }`)
+before shelling out to `blastcheck hook opencode post-tool-use`. The OpenCode hook
+tests (`src/hooks/opencode-*.test.ts`) apply that same mapping, so the fixtures
+double as documentation of the assumed native shape AND drive the capture tests.
+
+| File | Native event | Covers |
+|------|--------------|--------|
+| `opencode-tool-execute-after.sample.json` | `tool.execute.after` (`bash`) | `input.tool="bash"`, `output.args.command` → canonical `args.cmd` (Bash gate) |
+| `opencode-tool-execute-after-edit.sample.json` | `tool.execute.after` (`edit`) | `input.tool="edit"`, `output.args.filePath` → canonical `args.path` |
+
+⚠️ **Owed: a live-captured OpenCode sample (FR31, same lesson as Codex).** A live
+OpenCode session was not reachable in this dev environment, so these are
+**doc-derived** from the June-2026 OpenCode plugin docs
+(<https://opencode.ai/docs/plugins/>) — the event names + `(input, output)` field
+shapes — not captured from a running OpenCode instance. OpenCode warns plugin
+payloads are not a frozen interface. Before relying on field-compatibility in
+production, reconcile these against an actually-captured `tool.execute.after`
+payload (e.g. a temporary plugin that writes `JSON.stringify({ input, output })`
+to a file). Two field-name assumptions to confirm against a live sample: the
+result/exit-code keys under `output.metadata` (the default adapter reads
+`exit_code`/`exitCode`, while the docs suggest `exit`; the exit code is best-effort
+and degrades — the Bash gate keys off `args.cmd`, not the exit code) and that
+`edit`/`write` expose `filePath`. See `deferred-work.md`.
+
 ## NOT the rollout fixture
 
 Do **not** confuse these with `tests/fixtures/trajectories/codex-rollout.sample.jsonl`

@@ -15,7 +15,11 @@ import { realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import { runCodexPostToolUse, runPostToolUse } from "./hooks/post-tool-use.js";
+import {
+  runCodexPostToolUse,
+  runOpencodePostToolUse,
+  runPostToolUse,
+} from "./hooks/post-tool-use.js";
 import { runSessionStart } from "./hooks/session-start.js";
 import { parseHookPayload, readStdin } from "./hooks/state.js";
 import { runStop } from "./hooks/stop.js";
@@ -258,6 +262,34 @@ export function buildProgram(outcome: Outcome): Command {
     .action(async () => {
       const payload = parseHookPayload(await readStdin());
       outcome.code = await runStop(payload, hookCwd(payload));
+    });
+
+  // OpenCode lifecycle handlers (Story 3.2), invoked by the generated
+  // `.opencode/plugins/blastcheck.ts` — `blastcheck hook opencode <event>`
+  // (space-separated), so a NESTED `opencode` sub-group is required to match the
+  // exact paths the plugin shells out to. This is CAPTURE ONLY: session-start +
+  // post-tool-use, NO `stop` (the audit-on-idle/end trigger is Story 3.3).
+  // SessionStart reuses the agent-agnostic handler verbatim; post-tool-use uses
+  // the DEFAULT adapter (the plugin pre-shapes the payload Claude-compatibly).
+  // Neither writes stdout (NFR5) — stdout stays reserved for the scorecard.
+  const opencode = hook
+    .command("opencode")
+    .description("Internal: OpenCode plugin lifecycle hook handlers (invoked via stdin).");
+
+  opencode
+    .command("session-start")
+    .description("OpenCode session-start handler: record the pre-commitment reference.")
+    .action(async () => {
+      const payload = parseHookPayload(await readStdin());
+      await runSessionStart(payload, hookCwd(payload));
+    });
+
+  opencode
+    .command("post-tool-use")
+    .description("OpenCode post-tool-use handler: append the normalized trajectory event.")
+    .action(async () => {
+      const payload = parseHookPayload(await readStdin());
+      await runOpencodePostToolUse(payload, hookCwd(payload));
     });
 
   return program;

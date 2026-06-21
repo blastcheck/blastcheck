@@ -1,0 +1,8 @@
+{
+  "input": { "tool": "bash", "sessionID": "ses_01J9Z8K4Q5W7X2Y3Z4A5B6C7D8", "callID": "call_bash01" },
+  "output": {
+    "args": { "command": "npm test", "description": "run the test suite" },
+    "output": "All tests passed",
+    "metadata": { "exit": 0 }
+  }
+}

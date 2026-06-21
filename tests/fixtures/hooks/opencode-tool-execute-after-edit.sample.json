@@ -1,0 +1,8 @@
+{
+  "input": { "tool": "edit", "sessionID": "ses_01J9Z8K4Q5W7X2Y3Z4A5B6C7D8", "callID": "call_edit01" },
+  "output": {
+    "args": { "filePath": "src/app.ts", "oldString": "export const x = 0;", "newString": "export const x = 1;" },
+    "output": "",
+    "metadata": {}
+  }
+}

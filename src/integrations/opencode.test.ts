@@ -40,22 +40,34 @@ describe("opencode integration installer", () => {
     });
   });
 
-  it("generates a dependency-free, marked, handler-free scaffold", async () => {
+  it("generates a dependency-free, marked plugin that subscribes to lifecycle events", async () => {
     await opencodeIntegration.install({ cwd: dir });
     const content = await readPlugin(dir);
 
-    // Ownership/idempotency marker on the first line.
+    // Ownership/idempotency marker on the first line (unchanged from 3.1).
     expect(content.startsWith("// blastcheck-managed: do not edit by hand.")).toBe(true);
 
     // Dependency-free (NFR15): no package import of any kind.
     expect(content).not.toContain("@opencode-ai/plugin");
     expect(content).not.toMatch(/import\s+.*\bfrom\b\s*["']/);
 
-    // Valid scaffold shape that subscribes to nothing (no event handlers yet).
+    // The now-real plugin (Story 3.2): exports the plugin and subscribes to the
+    // session-start + tool-completed lifecycle events, forwarding each to the CLI.
     expect(content).toContain("export const BlastcheckPlugin");
-    expect(content).toContain("return {};");
-    expect(content).not.toContain("session.");
-    expect(content).not.toContain("tool.execute");
+    expect(content).toContain('"session.created"');
+    expect(content).toContain('"tool.execute.after"');
+    expect(content).toContain("blastcheck hook opencode");
+    expect(content).not.toContain("return {};");
+
+    // CAPTURE ONLY: no audit-on-idle/end subscription or `stop` shell-out (3.3).
+    expect(content).not.toContain("session.idle");
+    expect(content).not.toContain("hook opencode stop");
+
+    // Injection-safe + non-fatal shell-out (NFR6/NFR15): piped via a Response
+    // body to stdin, swallowed via .quiet().nothrow() — never a `bash -c`.
+    expect(content).toContain("new Response(json)");
+    expect(content).toContain(".quiet().nothrow()");
+    expect(content).not.toContain("bash -c");
 
     // Exactly one trailing newline.
     expect(content.endsWith("};\n")).toBe(true);
