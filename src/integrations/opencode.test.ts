@@ -40,7 +40,7 @@ describe("opencode integration installer", () => {
     });
   });
 
-  it("generates a dependency-free, marked plugin that subscribes to lifecycle events", async () => {
+  it("routes the bus lifecycle events through the generic `event` hook with an idle guard", async () => {
     await opencodeIntegration.install({ cwd: dir });
     const content = await readPlugin(dir);
 
@@ -51,17 +51,31 @@ describe("opencode integration installer", () => {
     expect(content).not.toContain("@opencode-ai/plugin");
     expect(content).not.toMatch(/import\s+.*\bfrom\b\s*["']/);
 
-    // The now-real plugin (Story 3.2): exports the plugin and subscribes to the
-    // session-start + tool-completed lifecycle events, forwarding each to the CLI.
+    // The plugin exports the const and routes the bus lifecycle events
+    // (session.created / session.idle) through OpenCode's generic `event` hook —
+    // they are SDK Event members, NOT hook keys (Story 1.1 §6.5 wiring fix).
     expect(content).toContain("export const BlastcheckPlugin");
-    expect(content).toContain('"session.created"');
-    expect(content).toContain('"tool.execute.after"');
+    expect(content).toContain("event: async ({ event })");
+    expect(content).toContain('event.type === "session.created"');
+    expect(content).toContain('event.type === "session.idle"');
+    expect(content).toContain('forward("session-start"');
     expect(content).toContain("blastcheck hook opencode");
     expect(content).not.toContain("return {};");
 
-    // CAPTURE + AUDIT (Story 3.3): the session-idle end-of-turn event triggers the
-    // shared audit by shelling out to `blastcheck hook opencode stop`.
-    expect(content).toContain('"session.idle"');
+    // session.created / session.idle are no longer TOP-LEVEL hook keys (as keys
+    // they never fired — the latent bug). `tool.execute.after` IS a real
+    // interceptor key and stays a top-level key.
+    expect(content).not.toContain('"session.created":');
+    expect(content).not.toContain('"session.idle":');
+    expect(content).toContain('"tool.execute.after":');
+
+    // The plugin input destructures `client` so the idle guard can reach the SDK.
+    expect(content).toContain("async ({ $, directory, client })");
+
+    // CAPTURE + AUDIT: session.idle triggers the shared audit (`forward("stop")`)
+    // ONLY when the turn produced assistant output — the non-empty-output guard
+    // fetches the session messages via the typed client.
+    expect(content).toContain("client.session.messages");
     expect(content).toContain('forward("stop"');
 
     // Injection-safe + non-fatal shell-out (NFR6/NFR15): piped via a Response
