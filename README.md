@@ -104,6 +104,51 @@ blastcheck init
 human-readable summary) go to `stderr`. `--out` and `--comment` are optional side
 channels — a write failure on either is logged but never changes the exit code.
 
+## Contract
+
+The audit compares the change against a **contract** assembled from three trust
+sources, each owning different fields. Every source is optional — missing or
+invalid input degrades to safe defaults (with a warning), never an error.
+
+| Source | Owns | Trust model |
+| ------ | ---- | ----------- |
+| `task.md` (read from the **baseline** commit) | `allow` (in-scope paths) and `goal` | Pinned to the baseline via `git show <baseline>:task.md`. HEAD is never consulted, so the agent cannot rewrite its own promise after the fact. |
+| `.blastcheck.yml` (working tree, optional) | `deny`, `budget`, `thresholds`, `required_checks` | The human's optional override layer. |
+| Repo manifests (`package.json`, `pyproject.toml`, `Makefile`) | autodetected `required_checks` | Auto-detected QA scripts (`test`/`lint`/`typecheck`) become **soft** gates; a `.blastcheck.yml` entry upgrades a check to a **hard** gate. |
+
+**Scope lives in `task.md`, not `.blastcheck.yml`.** Declare it as YAML
+frontmatter, committed *before* the agent runs (the resolver reads it from the
+baseline commit):
+
+```markdown
+---
+goal: Add a --quiet flag to the run command
+allow:
+  - "src/**"
+  - "README.md"
+---
+
+# Task
+
+Free-form task description below the frontmatter.
+```
+
+With no `task.md` frontmatter, `allow` is empty — every changed file is reported
+as out-of-scope (a penalized-but-valid "no pre-commitment" state, not a failure).
+
+The optional override file (note the **leading dot**):
+
+```yaml
+# .blastcheck.yml
+deny:
+  - "**/*.env"
+budget:
+  max_files_changed: 20
+  max_churn_pct: 15
+required_checks:
+  - "npm test"
+```
+
 ## Agent integration status
 
 This matrix shows, per integration, **how you set it up** (setup maturity) and
