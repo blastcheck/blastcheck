@@ -15,6 +15,7 @@ import { realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
+import { runCodexNotify } from "./hooks/notify.js";
 import {
   runCodexPostToolUse,
   runOpencodePostToolUse,
@@ -28,6 +29,7 @@ import { getIntegration, isAgentId, supportedAgentsForMessage } from "./integrat
 import { buildReadinessSnapshot, printReadiness } from "./integrations/status.js";
 import { log, setVerbose } from "./log.js";
 import { claudeCodeReporter } from "./reporters/claude-code.js";
+import { codexReporter } from "./reporters/codex.js";
 import { resolveSurfacingOptions } from "./reporters/options.js";
 import { renderPrComment } from "./scorecard/markdown.js";
 import { printScorecard } from "./scorecard/print.js";
@@ -269,10 +271,15 @@ export function buildProgram(outcome: Outcome): Command {
 
   codex
     .command("stop")
-    .description("Codex Stop handler: run the audit and emit scorecard.json to stdout.")
+    .description("Codex Stop handler: run the audit and surface the verdict to Codex.")
     .action(async () => {
       const payload = parseHookPayload(await readStdin());
-      outcome.code = await runStop(payload, hookCwd(payload));
+      const cwd = hookCwd(payload);
+      // Codex reporter: the verdict rides in the Stop hook JSON (`systemMessage`,
+      // plus opt-in feedback/block), NOT the swallowed raw scorecard. The `fail`
+      // desktop alert is decoupled into the user-level `notify` program. The
+      // scorecard mirror stays the source of truth (written by runStop first).
+      outcome.code = await runStop(payload, cwd, codexReporter, await resolveSurfacingOptions(cwd));
     });
 
   // OpenCode lifecycle handlers (Story 3.2 capture + Story 3.3 audit), invoked by
@@ -312,6 +319,24 @@ export function buildProgram(outcome: Outcome): Command {
     .action(async () => {
       const payload = parseHookPayload(await readStdin());
       outcome.code = await runStop(payload, hookCwd(payload));
+    });
+
+  // User-level notify programs (Story 1.2). Unlike the `hook` entrypoints (which
+  // read stdin), an agent runtime invokes these with the event payload as the
+  // final argv positional. `codex` is Codex's `agent-turn-complete` notify
+  // target: it desktop-alerts on a `fail` scorecard and is a silent no-op
+  // otherwise. ALWAYS exit 0 — `notify` fires for every project on the machine.
+  const notify = program
+    .command("notify")
+    .description("Internal: user-level notify programs (invoked by the agent runtime via argv).");
+
+  notify
+    .command("codex")
+    .description("Codex agent-turn-complete notify: desktop-alert on a fail verdict.")
+    .argument("<payload>", "the agent-turn-complete event payload JSON (passed by Codex as argv)")
+    .action(async (payload: string) => {
+      await runCodexNotify(payload);
+      outcome.code = EXIT.OK;
     });
 
   return program;

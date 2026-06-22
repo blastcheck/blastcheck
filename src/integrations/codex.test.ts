@@ -1,9 +1,20 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codexIntegration } from "./codex.js";
 import { manifestPath, readInstallManifest, upsertInstallManifest } from "./manifest.js";
+
+// Redirect `os.homedir()` so the installer's user-level `notify` write lands in
+// a temp HOME — the real `~/.codex/config.toml` must NEVER be touched. The real
+// `tmpdir` is preserved (spread from the actual module).
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
+});
+
+/** Path to the user-level Codex config under the (mocked) temp HOME. */
+const codexConfig = (home: string) => join(home, ".codex", "config.toml");
 
 interface HookHandler {
   type?: string;
@@ -37,16 +48,22 @@ function allCommands(config: HooksConfig): string[] {
 
 describe("codex integration installer", () => {
   let dir: string;
+  let home: string;
 
   beforeEach(async () => {
     // Silence the installer's stderr diagnostics during the test run.
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     dir = await mkdtemp(join(tmpdir(), "blastcheck-codex-"));
+    // Redirect HOME to a temp dir so the user-level `notify` write NEVER touches
+    // the real `~/.codex/config.toml` (the install now writes outside the repo).
+    home = await mkdtemp(join(tmpdir(), "blastcheck-codex-home-"));
+    vi.mocked(homedir).mockReturnValue(home);
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
     await rm(dir, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
   });
 
   it("creates .codex/hooks.json with the three lifecycle commands and a needs-review manifest", async () => {
@@ -233,5 +250,94 @@ describe("codex integration installer", () => {
       agent: "codex",
     });
     expect(allCommands(await readHooks(dir))).toContain("blastcheck hook codex session-start");
+  });
+
+  // --- user-level `notify` write (AC7/AC8) — always against the temp HOME ---
+
+  it("writes the user-level notify entry into a fresh ~/.codex/config.toml", async () => {
+    await codexIntegration.install({ cwd: dir });
+    const config = await readFile(codexConfig(home), "utf8");
+    expect(config).toContain('notify = ["blastcheck", "notify", "codex"]');
+  });
+
+  it("inserts notify as a top-level bare key ABOVE any existing [table] (valid TOML)", async () => {
+    await mkdir(join(home, ".codex"), { recursive: true });
+    await writeFile(codexConfig(home), '[mcp_servers.foo]\ncommand = "x"\n', "utf8");
+
+    await codexIntegration.install({ cwd: dir });
+    const config = await readFile(codexConfig(home), "utf8");
+    const notifyIdx = config.indexOf("notify =");
+    const tableIdx = config.indexOf("[mcp_servers.foo]");
+    expect(notifyIdx).toBeGreaterThanOrEqual(0);
+    // The bare key must precede the first table header.
+    expect(notifyIdx).toBeLessThan(tableIdx);
+    // The user's table + value survive untouched.
+    expect(config).toContain('command = "x"');
+  });
+
+  it("is idempotent — a re-run does not rewrite ~/.codex/config.toml (no mtime churn)", async () => {
+    await codexIntegration.install({ cwd: dir });
+    const before = await stat(codexConfig(home));
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await codexIntegration.install({ cwd: dir });
+    const after = await stat(codexConfig(home));
+
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    // Exactly one notify line — not duplicated.
+    const config = await readFile(codexConfig(home), "utf8");
+    expect(config.match(/^\s*notify\s*=/gm)).toHaveLength(1);
+  });
+
+  it("preserves a DIFFERENT user-owned notify and does not overwrite it", async () => {
+    await mkdir(join(home, ".codex"), { recursive: true });
+    await writeFile(codexConfig(home), 'notify = ["my-own-notifier"]\n', "utf8");
+    const before = await readFile(codexConfig(home), "utf8");
+
+    await codexIntegration.install({ cwd: dir });
+    const after = await readFile(codexConfig(home), "utf8");
+
+    // Left byte-identical: the user's notify wins, blastcheck's is not injected.
+    expect(after).toBe(before);
+    expect(after).not.toContain("blastcheck");
+  });
+
+  it("is idempotent when our notify sits AFTER a multi-line top-level array (no duplicate key)", async () => {
+    // Regression: a `[`-leading array continuation line must NOT be mistaken for
+    // a `[table]` header — otherwise the top-level scan stops early, misses the
+    // existing notify, and prepends a SECOND (invalid) notify on re-run.
+    await mkdir(join(home, ".codex"), { recursive: true });
+    await writeFile(
+      codexConfig(home),
+      'packages = [\n  ["a"],\n  ["b"],\n]\nnotify = ["blastcheck", "notify", "codex"]\n',
+      "utf8",
+    );
+    const before = await stat(codexConfig(home));
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await codexIntegration.install({ cwd: dir });
+    const after = await stat(codexConfig(home));
+
+    // Detected as already-present → no rewrite, and exactly one notify line.
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    const config = await readFile(codexConfig(home), "utf8");
+    expect(config.match(/^\s*notify\s*=/gm)).toHaveLength(1);
+    expect(config).toContain('["a"]');
+  });
+
+  it("does NOT modify .codex/hooks.json definitions for the notify write (no re-trust, AC8)", async () => {
+    await codexIntegration.install({ cwd: dir });
+    const before = await stat(hooksFile(dir));
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await codexIntegration.install({ cwd: dir });
+    const after = await stat(hooksFile(dir));
+    // The hook command strings (trust hash) are unchanged across re-install.
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(allCommands(await readHooks(dir)).sort()).toEqual([
+      "blastcheck hook codex post-tool-use",
+      "blastcheck hook codex session-start",
+      "blastcheck hook codex stop",
+    ]);
   });
 });

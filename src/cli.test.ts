@@ -38,15 +38,18 @@ vi.mock("./integrations/status.js", () => ({
 // The `hook` subcommands are wiring-only at the CLI layer; their
 // behavior is covered by the hooks' own tests. Here we mock them so the CLI test
 // stays a pure arg-parsing/exit-code check and never blocks on real stdin.
-const { runStopMock, runSessionStartMock, runPostToolUseMock, readStdinMock } = vi.hoisted(() => ({
-  runStopMock: vi.fn(),
-  runSessionStartMock: vi.fn(),
-  runPostToolUseMock: vi.fn(),
-  readStdinMock: vi.fn(),
-}));
+const { runStopMock, runSessionStartMock, runPostToolUseMock, readStdinMock, runCodexNotifyMock } =
+  vi.hoisted(() => ({
+    runStopMock: vi.fn(),
+    runSessionStartMock: vi.fn(),
+    runPostToolUseMock: vi.fn(),
+    readStdinMock: vi.fn(),
+    runCodexNotifyMock: vi.fn(),
+  }));
 vi.mock("./hooks/stop.js", () => ({ runStop: runStopMock }));
 vi.mock("./hooks/session-start.js", () => ({ runSessionStart: runSessionStartMock }));
 vi.mock("./hooks/post-tool-use.js", () => ({ runPostToolUse: runPostToolUseMock }));
+vi.mock("./hooks/notify.js", () => ({ runCodexNotify: runCodexNotifyMock }));
 vi.mock("./hooks/state.js", () => ({
   readStdin: readStdinMock,
   parseHookPayload: (text: string) => (text === "" ? undefined : JSON.parse(text)),
@@ -100,9 +103,10 @@ describe("cli main", () => {
       warnings: [],
       supportedAgents: "claude-code, codex, opencode, github",
     });
-    for (const m of [runStopMock, runSessionStartMock, runPostToolUseMock]) {
+    for (const m of [runStopMock, runSessionStartMock, runPostToolUseMock, runCodexNotifyMock]) {
       m.mockReset();
     }
+    runCodexNotifyMock.mockResolvedValue(undefined);
     readStdinMock.mockReset();
     readStdinMock.mockResolvedValue("");
     // Suppress (and capture) CLI output so the test log stays clean.
@@ -357,6 +361,24 @@ describe("cli main", () => {
     );
   });
 
+  it("hook codex stop forwards the payload, its cwd, and the Codex reporter + surfacing options", async () => {
+    readStdinMock.mockResolvedValue(JSON.stringify({ cwd: "/work", stop_hook_active: false }));
+    runStopMock.mockResolvedValue(EXIT.OK);
+    await main(argv("hook", "codex", "stop"));
+    // Mirrors the Claude `hook stop` wiring: per-agent reporter + resolved options.
+    expect(runStopMock).toHaveBeenCalledWith(
+      { cwd: "/work", stop_hook_active: false },
+      "/work",
+      expect.objectContaining({ surface: expect.any(Function) }),
+      expect.objectContaining({ feedback: expect.any(Boolean), block: expect.any(Boolean) }),
+    );
+  });
+
+  it("hook codex stop maps the hook's exit code through to the process", async () => {
+    runStopMock.mockResolvedValue(EXIT.FAIL);
+    await expect(main(argv("hook", "codex", "stop"))).resolves.toBe(EXIT.FAIL);
+  });
+
   it("hook session-start / post-tool-use invoke their handlers and exit 0", async () => {
     runSessionStartMock.mockResolvedValue(undefined);
     runPostToolUseMock.mockResolvedValue(undefined);
@@ -373,6 +395,19 @@ describe("cli main", () => {
     runStopMock.mockResolvedValue(EXIT.FAIL);
     await expect(main(argv("hook", "opencode", "stop"))).resolves.toBe(EXIT.FAIL);
     expect(runStopMock).toHaveBeenCalledWith({ cwd: "/work" }, "/work");
+  });
+
+  it("notify codex forwards the argv payload positional to runCodexNotify and exits 0", async () => {
+    const payload = JSON.stringify({ type: "agent-turn-complete", cwd: "/work" });
+    await expect(main(argv("notify", "codex", payload))).resolves.toBe(EXIT.OK);
+    // Codex passes the event as an argv positional (NOT stdin) — assert it lands.
+    expect(runCodexNotifyMock).toHaveBeenCalledWith(payload);
+    expect(readStdinMock).not.toHaveBeenCalled();
+  });
+
+  it("notify codex still exits 0 even when the handler is a no-op (missing scorecard)", async () => {
+    await expect(main(argv("notify", "codex", "{}"))).resolves.toBe(EXIT.OK);
+    expect(runCodexNotifyMock).toHaveBeenCalledTimes(1);
   });
 
   // `adapt` runs the real adapter registry (not mocked) — it never touches runAudit.
