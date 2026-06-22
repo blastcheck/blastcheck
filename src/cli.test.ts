@@ -344,11 +344,17 @@ describe("cli main", () => {
     expect(runStopMock).toHaveBeenCalledTimes(1);
   });
 
-  it("hook stop forwards the parsed stdin payload and its cwd", async () => {
+  it("hook stop forwards the parsed stdin payload, its cwd, and the Claude Code reporter", async () => {
     readStdinMock.mockResolvedValue(JSON.stringify({ cwd: "/work", stop_hook_active: false }));
     runStopMock.mockResolvedValue(EXIT.OK);
     await main(argv("hook", "stop"));
-    expect(runStopMock).toHaveBeenCalledWith({ cwd: "/work", stop_hook_active: false }, "/work");
+    // Now also passes the per-agent reporter and resolved surfacing options.
+    expect(runStopMock).toHaveBeenCalledWith(
+      { cwd: "/work", stop_hook_active: false },
+      "/work",
+      expect.objectContaining({ surface: expect.any(Function) }),
+      expect.objectContaining({ feedback: expect.any(Boolean), block: expect.any(Boolean) }),
+    );
   });
 
   it("hook session-start / post-tool-use invoke their handlers and exit 0", async () => {

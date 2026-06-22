@@ -77,3 +77,34 @@ export const blastcheckYmlSchema = z
   }));
 
 export type BlastcheckYmlOverride = z.infer<typeof blastcheckYmlSchema>;
+
+/**
+ * Optional `surfacing:` block in `.blastcheck.yml` — the human's opt-in for the
+ * verdict-surfacing egress layer (brief §7). Orthogonal to the scope contract:
+ * it tunes what the per-agent reporters do at end-of-turn, never the verdict
+ * itself. Both flags default OFF (Slava's §7.2/§7.3 decisions) so the tool stays
+ * passive by default; they only widen behavior when explicitly enabled.
+ *
+ *  - `feedback`: inject the verdict back into the agent's own context (Claude
+ *    `additionalContext`, Codex exit-2+stderr, OpenCode `session.prompt`). The
+ *    "agent A audits agent B" loop — changes the agent's turn, hence opt-in.
+ *  - `block`: hard-block a `fail` (Claude `decision:block`, Codex exit 2). For
+ *    CI-style gating; off by default so surfacing never blocks a local session.
+ *
+ * Lenient like the others: unknown keys ignored, both fields optional.
+ */
+export const surfacingSchema = z
+  .object({
+    surfacing: z
+      .object({
+        feedback: z.boolean().optional(),
+        block: z.boolean().optional(),
+      })
+      .optional(),
+  })
+  .transform((raw) => ({
+    feedback: raw.surfacing?.feedback,
+    block: raw.surfacing?.block,
+  }));
+
+export type SurfacingOverride = z.infer<typeof surfacingSchema>;

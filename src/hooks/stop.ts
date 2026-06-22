@@ -1,20 +1,26 @@
 /**
  * `blastcheck hook stop` — runs the audit at session end (AC3).
  *
- * Fires from Claude Code's `Stop` event. It mirrors `blastcheck run` exactly,
- * through the SAME `runAudit()` entry point (AR9): `scorecard.json` → stdout
- * (NFR9), the human summary → stderr, and the exit code follows the verdict
- * (`fail` → 1, otherwise 0; a tool error → 2, NFR10). The scorecard is also
- * mirrored to `.blastcheck/scorecard.json` for convenience.
+ * Fires from an agent's end-of-turn event (Claude Code `Stop`, Codex `Stop`,
+ * OpenCode `session.idle`). It runs the audit through the SAME `runAudit()` entry
+ * point (AR9), then ALWAYS mirrors the scorecard to `.blastcheck/scorecard.json`
+ * — the source of truth (brief §4.3) — before handing it to a {@link Reporter}.
  *
- * Loop guard: when Claude Code is already continuing because of a previous
- * blocking Stop hook (`stop_hook_active === true`), this returns immediately
- * without re-auditing.
+ * The reporter owns the surfacing (stdout / stderr / desktop alert) AND the exit
+ * code, so each agent can speak its native idiom (brief §8). The default
+ * {@link rawReporter} reproduces the pre-surfacing behavior (scorecard → stdout,
+ * summary → stderr, `fail` → exit 1) so `runStop(payload, cwd)` and the tests
+ * that call it directly are unchanged; the CLI passes the per-agent reporter.
+ *
+ * Loop guard: when an agent is already continuing because of a previous blocking
+ * Stop hook (`stop_hook_active === true`), this returns immediately without
+ * re-auditing.
  */
 
 import { runAudit } from "../index.js";
 import { log } from "../log.js";
-import { printScorecard } from "../scorecard/print.js";
+import { rawReporter } from "../reporters/raw.js";
+import { DEFAULT_SURFACING, type Reporter, type SurfacingOptions } from "../reporters/types.js";
 import { EXIT, type ExitCode } from "../types.js";
 import {
   baselinePath,
@@ -29,6 +35,8 @@ import {
 export async function runStop(
   payload: Record<string, unknown> | undefined,
   cwd: string,
+  reporter: Reporter = rawReporter,
+  options: SurfacingOptions = DEFAULT_SURFACING,
 ): Promise<ExitCode> {
   // Avoid an audit loop if a prior Stop hook already asked Claude to continue.
   if (payload?.stop_hook_active === true) {
@@ -60,13 +68,11 @@ export async function runStop(
     return EXIT.TOOL_ERROR;
   }
 
-  // stdout: the machine contract, and nothing else (NFR9).
   const json = `${JSON.stringify(scorecard, null, 2)}\n`;
-  process.stdout.write(json);
-  // stderr: the human-readable summary.
-  printScorecard(scorecard);
 
-  // Side mirror; a write failure must not change the verdict's exit code.
+  // Source of truth FIRST (brief §4.3): mirror the scorecard before any surfacing,
+  // so the durable artifact exists even if a reporter channel is unavailable. A
+  // write failure must not change the verdict's exit code.
   try {
     await writeStateFile(scorecardPath(cwd), json);
   } catch (err) {
@@ -76,5 +82,13 @@ export async function runStop(
     );
   }
 
-  return scorecard.verdict === "fail" ? EXIT.FAIL : EXIT.OK;
+  // Surfacing + exit code are the reporter's job (default: raw scorecard → stdout,
+  // summary → stderr, verdict → exit code). A reporter must degrade quietly, but
+  // guard anyway: a surfacing failure must never mask a completed audit.
+  try {
+    return await reporter.surface({ scorecard, json }, options);
+  } catch (err) {
+    log("warn", `stop: reporter failed: ${err instanceof Error ? err.message : String(err)}`);
+    return scorecard.verdict === "fail" ? EXIT.FAIL : EXIT.OK;
+  }
 }

@@ -27,6 +27,8 @@ import { runAudit } from "./index.js";
 import { getIntegration, isAgentId, supportedAgentsForMessage } from "./integrations/registry.js";
 import { buildReadinessSnapshot, printReadiness } from "./integrations/status.js";
 import { log, setVerbose } from "./log.js";
+import { claudeCodeReporter } from "./reporters/claude-code.js";
+import { resolveSurfacingOptions } from "./reporters/options.js";
 import { renderPrComment } from "./scorecard/markdown.js";
 import { printScorecard } from "./scorecard/print.js";
 import { adaptLogToJsonl } from "./trajectory/adapters/adapt.js";
@@ -224,10 +226,19 @@ export function buildProgram(outcome: Outcome): Command {
 
   hook
     .command("stop")
-    .description("Stop handler: run the audit and emit scorecard.json to stdout.")
+    .description("Stop handler: run the audit and surface the verdict to Claude Code.")
     .action(async () => {
       const payload = parseHookPayload(await readStdin());
-      outcome.code = await runStop(payload, hookCwd(payload));
+      const cwd = hookCwd(payload);
+      // Claude Code reporter: the verdict rides in the hook JSON (systemMessage +
+      // fail alert), not the swallowed raw scorecard. The scorecard mirror stays
+      // the source of truth (written by runStop before the reporter runs).
+      outcome.code = await runStop(
+        payload,
+        cwd,
+        claudeCodeReporter,
+        await resolveSurfacingOptions(cwd),
+      );
     });
 
   // Codex lifecycle handlers (Story 2.2), invoked by the `.codex/hooks.json`
