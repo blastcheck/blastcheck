@@ -106,13 +106,30 @@ channels — a write failure on either is logged but never changes the exit code
 
 ## Agent integration status
 
-| Agent / surface | Status | How to use it |
-| --------------- | ------ | ------------- |
-| Claude Code | Plug-and-play local hooks | `blastcheck init` installs `SessionStart`, `PostToolUse`, and `Stop` hooks for trajectory capture and audit. |
-| GitHub Actions | Plug-and-play CI gate | Use the composite Action from this repository in a PR workflow. |
-| Codex | Plug-and-play local hooks (one-time `/hooks` trust review) | `blastcheck init --agent codex` installs `.codex/hooks.json` with `SessionStart`, `PostToolUse`, and `Stop` hooks for trajectory capture and session-end audit. |
-| Cursor | Adapter ready, installer missing | Convert a Cursor stream/log with `blastcheck adapt --from cursor <log>`, then audit the generated trajectory. |
-| Aider | Adapter ready, installer missing | Convert `.aider.chat.history.md` with `blastcheck adapt --from aider <log>`, then audit the generated trajectory. |
+This matrix shows, per integration, **how you set it up** (setup maturity) and
+**what evidence the audit can capture** (evidence level). Evidence values use the
+same vocabulary as `blastcheck status`, so a row maps directly to live output —
+see [Evidence levels](#evidence-levels) below.
+
+| Integration | Setup (maturity) | Evidence level | Caveat / next action |
+| ----------- | ---------------- | -------------- | -------------------- |
+| **Claude Code** | `blastcheck init` (or `--agent claude-code`) → `.claude/settings.json` hooks (`SessionStart`/`PostToolUse`/`Stop`); trust auto-`trusted`. | **`full`** (trajectory-rich) once a session runs. | `—` — run a session to capture a trajectory (`pending` until then). |
+| **Codex** | `blastcheck init --agent codex` → `.codex/hooks.json` (same three lifecycle events); trust `needs-review`. | **`pending`** → trajectory-rich once trusted + run. | **review hooks in Codex `/hooks`** — installed ≠ ready: the hooks don't run until you complete Codex's one-time `/hooks` trust review (see [Codex](#codex)). |
+| **OpenCode** | `blastcheck init --agent opencode` → `.opencode/plugins/blastcheck.ts` (auto-loaded; trust `trusted`). | **`pending`** → trajectory-rich once the runtime is verified + a session runs. | install/run OpenCode so its runtime resolves on `PATH` — `status` shows `runtime: verified` / `not verified`. |
+| **GitHub** | Composite **Action** in a PR workflow (see [GitHub Action](#github-action)). **Not** `init --agent github` — that command is unimplemented and errors. | **`git-only`** — diff only, no trajectory captured. | trajectory checks are reported `skipped`, never fabricated; branch-protect the check to block merge. |
+| **Cursor / Aider** | **Adapter-only — no installer.** Import a log with `blastcheck adapt --from cursor\|aider <log>`, then `run`. | **`full`** (trajectory-rich) **only after** importing a log; `absent` otherwise. | one-off / import path — there is no Cursor or Aider installer. |
+
+### Evidence levels
+
+`blastcheck status` reports each integration's evidence using four states. The
+**git-only vs trajectory-rich** distinction maps directly onto the
+[Checks](#checks) `Class` column — git-only checks need only the diff, while
+trajectory checks need a captured execution trajectory.
+
+- **`full` (trajectory-rich)** — the diff **and** a captured trajectory are present, so all six checks run (the three git-only checks *and* the three trajectory checks).
+- **`git-only`** — only the diff is available, so the three git-only checks (`denied-files`, `scope-adhesion`, `churn`) run and the three trajectory checks (`extraneous-tool-calls`, `required-checks`, `loop-detection`) are reported **`skipped`** — honestly marked, never fabricated (the scorecard records `evidence_level.trajectory: absent`). This is what the GitHub Action produces.
+- **`pending`** — installed, but no evidence captured yet (Codex before its `/hooks` trust review and first session; OpenCode before its runtime is verified and a session runs).
+- **`absent`** — nothing installed or captured.
 
 ### Codex
 
