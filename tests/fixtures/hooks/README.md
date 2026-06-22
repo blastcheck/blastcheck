@@ -30,9 +30,15 @@ double as documentation of the assumed native shape AND drive the capture tests.
 | `opencode-tool-execute-after.sample.json` | `tool.execute.after` (`bash`) | `input.tool="bash"`, `output.args.command` → canonical `args.cmd` (Bash gate) |
 | `opencode-tool-execute-after-edit.sample.json` | `tool.execute.after` (`edit`) | `input.tool="edit"`, `output.args.filePath` → canonical `args.path` |
 
-⚠️ **Owed: a live-captured OpenCode sample (FR31, same lesson as Codex).** A live
-OpenCode session was not reachable in this dev environment, so these are
-**doc-derived** from the June-2026 OpenCode plugin docs
+⚠️ **Owed: a live-captured OpenCode sample (FR31, same lesson as Codex).** Story
+3.3 re-attempted the live capture: the OpenCode runtime (v1.3.3) IS installed and a
+temporary logging plugin loaded successfully (`plugin.init` fired, confirming the
+`{ directory }` context shape and that `session.created`/`session.idle`/
+`tool.execute.after` are accepted event names), but **no real tool-call round-trip
+could be driven** — the only config-enabled provider (`protei`) is a VPN-gated
+internal endpoint, and `anthropic` is disabled in the global config and its model
+catalog does not resolve offline. So the `(input, output)` payloads + `session.idle`
+shape remain **doc-derived** from the June-2026 OpenCode plugin docs
 (<https://opencode.ai/docs/plugins/>) — the event names + `(input, output)` field
 shapes — not captured from a running OpenCode instance. OpenCode warns plugin
 payloads are not a frozen interface. Before relying on field-compatibility in

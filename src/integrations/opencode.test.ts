@@ -59,9 +59,10 @@ describe("opencode integration installer", () => {
     expect(content).toContain("blastcheck hook opencode");
     expect(content).not.toContain("return {};");
 
-    // CAPTURE ONLY: no audit-on-idle/end subscription or `stop` shell-out (3.3).
-    expect(content).not.toContain("session.idle");
-    expect(content).not.toContain("hook opencode stop");
+    // CAPTURE + AUDIT (Story 3.3): the session-idle end-of-turn event triggers the
+    // shared audit by shelling out to `blastcheck hook opencode stop`.
+    expect(content).toContain('"session.idle"');
+    expect(content).toContain('forward("stop"');
 
     // Injection-safe + non-fatal shell-out (NFR6/NFR15): piped via a Response
     // body to stdin, swallowed via .quiet().nothrow() — never a `bash -c`.

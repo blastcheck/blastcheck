@@ -264,14 +264,15 @@ export function buildProgram(outcome: Outcome): Command {
       outcome.code = await runStop(payload, hookCwd(payload));
     });
 
-  // OpenCode lifecycle handlers (Story 3.2), invoked by the generated
-  // `.opencode/plugins/blastcheck.ts` — `blastcheck hook opencode <event>`
-  // (space-separated), so a NESTED `opencode` sub-group is required to match the
-  // exact paths the plugin shells out to. This is CAPTURE ONLY: session-start +
-  // post-tool-use, NO `stop` (the audit-on-idle/end trigger is Story 3.3).
-  // SessionStart reuses the agent-agnostic handler verbatim; post-tool-use uses
-  // the DEFAULT adapter (the plugin pre-shapes the payload Claude-compatibly).
-  // Neither writes stdout (NFR5) — stdout stays reserved for the scorecard.
+  // OpenCode lifecycle handlers (Story 3.2 capture + Story 3.3 audit), invoked by
+  // the generated `.opencode/plugins/blastcheck.ts` — `blastcheck hook opencode
+  // <event>` (space-separated), so a NESTED `opencode` sub-group is required to
+  // match the exact paths the plugin shells out to. session-start + post-tool-use
+  // CAPTURE the canonical trajectory; `stop` (the audit-on-idle/end trigger,
+  // Story 3.3) runs the audit through the shared `runStop`. SessionStart/Stop reuse
+  // the agent-agnostic handlers verbatim; post-tool-use uses the DEFAULT adapter
+  // (the plugin pre-shapes the payload Claude-compatibly). Only `stop` writes
+  // stdout (the scorecard, NFR9); session-start/post-tool-use stay silent (NFR5).
   const opencode = hook
     .command("opencode")
     .description("Internal: OpenCode plugin lifecycle hook handlers (invoked via stdin).");
@@ -290,6 +291,16 @@ export function buildProgram(outcome: Outcome): Command {
     .action(async () => {
       const payload = parseHookPayload(await readStdin());
       await runOpencodePostToolUse(payload, hookCwd(payload));
+    });
+
+  opencode
+    .command("stop")
+    .description(
+      "OpenCode session-idle/end handler: run the audit and emit scorecard.json to stdout.",
+    )
+    .action(async () => {
+      const payload = parseHookPayload(await readStdin());
+      outcome.code = await runStop(payload, hookCwd(payload));
     });
 
   return program;

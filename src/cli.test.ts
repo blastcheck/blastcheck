@@ -333,6 +333,15 @@ describe("cli main", () => {
     expect(runPostToolUseMock).toHaveBeenCalledTimes(1);
   });
 
+  it("hook opencode stop routes to runStop and maps its exit code through (AC6)", async () => {
+    // The plugin's `session.idle` shell-out invokes this exact space-separated
+    // path; it must resolve to the agent-agnostic runStop and carry its code.
+    readStdinMock.mockResolvedValue(JSON.stringify({ cwd: "/work" }));
+    runStopMock.mockResolvedValue(EXIT.FAIL);
+    await expect(main(argv("hook", "opencode", "stop"))).resolves.toBe(EXIT.FAIL);
+    expect(runStopMock).toHaveBeenCalledWith({ cwd: "/work" }, "/work");
+  });
+
   // `adapt` runs the real adapter registry (not mocked) — it never touches runAudit.
   const codexFixture = join(
     process.cwd(),
