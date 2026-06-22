@@ -388,13 +388,29 @@ describe("cli main", () => {
     expect(runPostToolUseMock).toHaveBeenCalledTimes(1);
   });
 
-  it("hook opencode stop routes to runStop and maps its exit code through (AC6)", async () => {
+  it("hook opencode stop forwards the payload, its cwd, and the OpenCode reporter + surfacing options", async () => {
     // The plugin's `session.idle` shell-out invokes this exact space-separated
-    // path; it must resolve to the agent-agnostic runStop and carry its code.
+    // path; it must resolve to runStop with the per-agent OpenCode reporter +
+    // resolved options, mirroring the Claude `hook stop` / Codex `hook codex stop`
+    // wiring (Story 1.3 — was a bare 2-arg runStop before).
     readStdinMock.mockResolvedValue(JSON.stringify({ cwd: "/work" }));
+    runStopMock.mockResolvedValue(EXIT.OK);
+    await main(argv("hook", "opencode", "stop"));
+    expect(runStopMock).toHaveBeenCalledWith(
+      { cwd: "/work" },
+      "/work",
+      expect.objectContaining({ surface: expect.any(Function) }),
+      expect.objectContaining({ feedback: expect.any(Boolean), block: expect.any(Boolean) }),
+    );
+  });
+
+  it("hook opencode stop maps the reporter's exit code through to the process", async () => {
+    // The OpenCode reporter always returns OK, but the CLI must forward whatever
+    // runStop returns (the mock proves the wiring, not the reporter's policy).
+    // Use a non-OK sentinel so this proves real pass-through, not a tautology:
+    // an OK→OK assertion would also pass if the CLI hard-coded the result.
     runStopMock.mockResolvedValue(EXIT.FAIL);
     await expect(main(argv("hook", "opencode", "stop"))).resolves.toBe(EXIT.FAIL);
-    expect(runStopMock).toHaveBeenCalledWith({ cwd: "/work" }, "/work");
   });
 
   it("notify codex forwards the argv payload positional to runCodexNotify and exits 0", async () => {

@@ -5,6 +5,7 @@
 
 export { claudeCodeReporter } from "./claude-code.js";
 export { codexReporter } from "./codex.js";
+export { opencodeReporter } from "./opencode.js";
 export { resolveSurfacingOptions } from "./options.js";
 export { rawReporter } from "./raw.js";
 export { DEFAULT_SURFACING, type Reporter, type SurfacingOptions } from "./types.js";

@@ -69,19 +69,33 @@ describe("opencode integration installer", () => {
     expect(content).not.toContain('"session.idle":');
     expect(content).toContain('"tool.execute.after":');
 
-    // The plugin input destructures `client` so the idle guard can reach the SDK.
+    // The plugin input destructures `client` so the idle guard + surfacing can
+    // reach the SDK.
     expect(content).toContain("async ({ $, directory, client })");
 
-    // CAPTURE + AUDIT: session.idle triggers the shared audit (`forward("stop")`)
-    // ONLY when the turn produced assistant output — the non-empty-output guard
-    // fetches the session messages via the typed client.
+    // CAPTURE + AUDIT: session.idle surfaces the verdict (`surfaceVerdict`) ONLY
+    // when the turn produced assistant output — the non-empty-output guard fetches
+    // the session messages via the typed client.
     expect(content).toContain("client.session.messages");
-    expect(content).toContain('forward("stop"');
+    expect(content).toContain("producedAssistantOutput");
+    expect(content).toContain("surfaceVerdict");
+
+    // SURFACE (Story 1.3): the idle path captures the `hook opencode stop` stdout
+    // surface line and renders it via the typed client — a toast on every verdict
+    // plus opt-in feedback as an injected prompt.
+    expect(content).toContain("blastcheck hook opencode stop");
+    expect(content).toContain("client.tui.showToast");
+    expect(content).toContain("client.session.prompt");
+    // stdout is CAPTURED (not fire-and-forget): the Bun `$` `.text()` form.
+    expect(content).toContain(".text()");
+    // session.idle no longer fire-and-forgets the stop (it now captures + renders).
+    expect(content).not.toContain('forward("stop"');
 
     // Injection-safe + non-fatal shell-out (NFR6/NFR15): piped via a Response
     // body to stdin, swallowed via .quiet().nothrow() — never a `bash -c`.
     expect(content).toContain("new Response(json)");
-    expect(content).toContain(".quiet().nothrow()");
+    expect(content).toContain(".quiet()");
+    expect(content).toContain(".nothrow()");
     expect(content).not.toContain("bash -c");
 
     // Exactly one trailing newline.

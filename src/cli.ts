@@ -30,6 +30,7 @@ import { buildReadinessSnapshot, printReadiness } from "./integrations/status.js
 import { log, setVerbose } from "./log.js";
 import { claudeCodeReporter } from "./reporters/claude-code.js";
 import { codexReporter } from "./reporters/codex.js";
+import { opencodeReporter } from "./reporters/opencode.js";
 import { resolveSurfacingOptions } from "./reporters/options.js";
 import { renderPrComment } from "./scorecard/markdown.js";
 import { printScorecard } from "./scorecard/print.js";
@@ -314,11 +315,23 @@ export function buildProgram(outcome: Outcome): Command {
   opencode
     .command("stop")
     .description(
-      "OpenCode session-idle/end handler: run the audit and emit scorecard.json to stdout.",
+      "OpenCode session-idle/end handler: run the audit and surface the verdict to OpenCode.",
     )
     .action(async () => {
       const payload = parseHookPayload(await readStdin());
-      outcome.code = await runStop(payload, hookCwd(payload));
+      const cwd = hookCwd(payload);
+      // OpenCode reporter: the verdict rides in a surface JSON line on stdout
+      // ({ message, variant, feedback? }) that the plugin's session.idle handler
+      // captures and renders via the typed `client` (toast + opt-in feedback);
+      // the `fail` desktop alert fires here CLI-side. The scorecard mirror stays
+      // the source of truth (written by runStop first). Always exits OK — the
+      // plugin shells `.nothrow()` and discards the code.
+      outcome.code = await runStop(
+        payload,
+        cwd,
+        opencodeReporter,
+        await resolveSurfacingOptions(cwd),
+      );
     });
 
   // User-level notify programs (Story 1.2). Unlike the `hook` entrypoints (which
