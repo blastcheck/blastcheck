@@ -297,6 +297,33 @@ describe("cli main", () => {
     expect(out).toBe("");
   });
 
+  it("status with an unverified OpenCode runtime still exits 0 and writes nothing to stdout", async () => {
+    // An unverified runtime is a warning, not a failure (FR40/FR41): the
+    // read-only command stays exit 0 with a clean stdout (NFR5).
+    buildReadinessSnapshotMock.mockResolvedValue({
+      integrations: [
+        {
+          agent: "opencode",
+          displayName: "OpenCode",
+          configFiles: [{ path: ".opencode/plugins/blastcheck.ts", present: true }],
+          trust: "trusted",
+          evidence: "pending",
+          runtime: "unverified",
+          actionNeeded: "install/run OpenCode to verify the runtime",
+        },
+      ],
+      trajectoryPresent: false,
+      baselinePresent: false,
+      warnings: [
+        "opencode: plugin installed but OpenCode runtime not verified (`opencode` not found on PATH)",
+      ],
+      supportedAgents: "claude-code, codex, opencode, github",
+    });
+    await expect(main(argv("status"))).resolves.toBe(EXIT.OK);
+    const out = stdout.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toBe("");
+  });
+
   it("status on an empty manifest still exits 0 and writes nothing to stdout", async () => {
     // beforeEach default: empty integrations. The read-only command never fails.
     await expect(main(argv("status"))).resolves.toBe(EXIT.OK);

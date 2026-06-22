@@ -255,4 +255,88 @@ describe("status readiness snapshot", () => {
     expect(byAgent["claude-code"].evidence).toBe("full");
     expect(byAgent.codex.evidence).toBe("pending");
   });
+
+  /** Write the OpenCode manifest entry with its plugin config file on disk. */
+  async function writeOpencodeInstall(): Promise<void> {
+    await writeManifest({
+      agent: "opencode",
+      display_name: "OpenCode",
+      config_files: [".opencode/plugins/blastcheck.ts"],
+      trust: "trusted",
+    });
+    await mkdir(join(dir, ".opencode", "plugins"), { recursive: true });
+    await writeFile(join(dir, ".opencode", "plugins", "blastcheck.ts"), "// plugin\n", "utf8");
+  }
+
+  it("flags an unverified OpenCode runtime as a warning, not a failure (FR40/FR41)", async () => {
+    await writeOpencodeInstall();
+    const snapshot = await buildReadinessSnapshot(dir, { detectRuntime: async () => false });
+
+    const oc = snapshot.integrations[0];
+    expect(oc.agent).toBe("opencode");
+    expect(oc.runtime).toBe("unverified");
+    // Evidence is computed independently of runtime (AC2): config present, no
+    // session → pending, NOT conflated with the runtime miss.
+    expect(oc.evidence).toBe("pending");
+    expect(oc.actionNeeded).toBe("install/run OpenCode to verify the runtime");
+    expect(
+      snapshot.warnings.some((w) => w.includes("runtime not verified") && w.includes("PATH")),
+    ).toBe(true);
+    const out = renderReadiness(snapshot).join("\n");
+    expect(out).toContain("runtime: not verified");
+  });
+
+  it("reports a verified runtime with evidence still computed separately (AC2)", async () => {
+    await writeOpencodeInstall();
+    const snapshot = await buildReadinessSnapshot(dir, { detectRuntime: async () => true });
+
+    const oc = snapshot.integrations[0];
+    expect(oc.runtime).toBe("verified");
+    // A verified runtime with no captured session is STILL pending evidence.
+    expect(oc.evidence).toBe("pending");
+    expect(snapshot.warnings).toEqual([]);
+    const out = renderReadiness(snapshot).join("\n");
+    expect(out).toContain("runtime: verified");
+  });
+
+  it("keeps evidence: full independent of a verified runtime", async () => {
+    await writeOpencodeInstall();
+    await writeState("trajectory.jsonl", '{"tool":"x"}\n');
+    await writeState("baseline", "abc123\n");
+
+    const snapshot = await buildReadinessSnapshot(dir, { detectRuntime: async () => true });
+    const oc = snapshot.integrations[0];
+    expect(oc.runtime).toBe("verified");
+    expect(oc.evidence).toBe("full");
+    expect(oc.actionNeeded).toBe("—");
+  });
+
+  it("never annotates a non-OpenCode row with a runtime token (AC4 regression)", async () => {
+    await writeManifest(
+      {
+        agent: "claude-code",
+        display_name: "Claude Code",
+        config_files: [".claude/settings.json"],
+        trust: "trusted",
+      },
+      {
+        agent: "codex",
+        display_name: "Codex",
+        config_files: [".codex/hooks.json"],
+        trust: "trusted",
+      },
+    );
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await writeFile(join(dir, ".claude", "settings.json"), "{}", "utf8");
+    await mkdir(join(dir, ".codex"), { recursive: true });
+    await writeFile(join(dir, ".codex", "hooks.json"), "{}", "utf8");
+
+    // The detector would resolve true for any agent, but only OpenCode is probed.
+    const snapshot = await buildReadinessSnapshot(dir, { detectRuntime: async () => true });
+    for (const it of snapshot.integrations) {
+      expect(it.runtime).toBeUndefined();
+    }
+    const out = renderReadiness(snapshot).join("\n");
+    expect(out).not.toContain("runtime:");
+  });
 });

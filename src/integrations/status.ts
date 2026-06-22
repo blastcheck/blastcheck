@@ -25,10 +25,33 @@ import {
 } from "../hooks/state.js";
 import { readInstallManifest } from "./manifest.js";
 import { supportedAgentsForMessage } from "./registry.js";
+import { isExecutableOnPath } from "./runtime.js";
 import type { AgentId, InstallManifestEntry, InstallTrustState } from "./types.js";
 
 /** Evidence completeness per integration (UX-DR3). */
 export type EvidenceState = "full" | "pending" | "git-only" | "absent";
+
+/**
+ * Runtime availability for an integration (FR40). `verified` ⇔ the agent's
+ * runtime executable is resolvable on `PATH`; `unverified` ⇔ it is not. Only
+ * OpenCode carries a runtime axis today; `undefined` (the absent field on other
+ * integrations) means "runtime verification does not apply here".
+ */
+export type RuntimeState = "verified" | "unverified";
+
+/**
+ * Probes whether the runtime that would load `agent`'s integration is available.
+ * Injected so tests stay independent of the host `PATH` (mirrors the adapter
+ * seam in `runPostToolUse`). The default resolves the real PATH probe for
+ * OpenCode and `false` for every other agent.
+ */
+export type RuntimeDetector = (agent: AgentId) => Promise<boolean>;
+
+/** OpenCode CLI binary name — the runtime that auto-loads the local plugin. */
+const OPENCODE_RUNTIME_BIN = "opencode";
+
+const defaultDetectRuntime: RuntimeDetector = (agent) =>
+  agent === "opencode" ? isExecutableOnPath(OPENCODE_RUNTIME_BIN) : Promise.resolve(false);
 
 /** On-disk presence of one recorded config file. */
 export interface ConfigFileStatus {
@@ -43,6 +66,12 @@ export interface IntegrationReadiness {
   configFiles: ConfigFileStatus[];
   trust?: InstallTrustState;
   evidence: EvidenceState;
+  /**
+   * Runtime availability (FR40), or `undefined` when runtime verification does
+   * not apply to this integration (Claude Code / Codex / GitHub today). Reported
+   * separately from `evidence` — they are independent signals (AC2).
+   */
+  runtime?: RuntimeState;
   /** Next action for the user, or `"—"` when nothing is needed. */
   actionNeeded: string;
 }
@@ -98,11 +127,23 @@ function computeEvidence(opts: {
   return "absent";
 }
 
-/** Pick the single most useful next action for an integration (UX-DR4). */
+/**
+ * Pick the single most useful next action for an integration (UX-DR4).
+ *
+ * Precedence (deterministic, most-fundamental-first):
+ *   1. `needs-review` trust → review/trust the hooks.
+ *   2. missing config file → re-install (the most basic breakage).
+ *   3. `runtime === "unverified"` → install/run the runtime. An unverified
+ *      runtime outranks pending evidence: if the runtime is absent, no session
+ *      will ever capture a trajectory, so fixing it is the more useful hint.
+ *   4. `evidence === "pending"` → run the agent once to capture a trajectory.
+ *   5. else → `"—"`.
+ */
 function computeAction(opts: {
   agent: AgentId;
   trust?: InstallTrustState;
   hasMissingConfig: boolean;
+  runtime?: RuntimeState;
   evidence: EvidenceState;
 }): string {
   // A `needs-review` integration is installed but untrusted: the user must
@@ -114,6 +155,7 @@ function computeAction(opts: {
       : `run trust review for ${opts.agent}`;
   }
   if (opts.hasMissingConfig) return `re-run \`blastcheck init --agent ${opts.agent}\``;
+  if (opts.runtime === "unverified") return "install/run OpenCode to verify the runtime";
   if (opts.evidence === "pending") return "run your agent once to capture a trajectory";
   return "—";
 }
@@ -125,7 +167,11 @@ function computeAction(opts: {
  * warning, and a malformed scorecard becomes a warning — the command still
  * succeeds (FR41).
  */
-export async function buildReadinessSnapshot(cwd: string): Promise<ReadinessSnapshot> {
+export async function buildReadinessSnapshot(
+  cwd: string,
+  opts: { detectRuntime?: RuntimeDetector } = {},
+): Promise<ReadinessSnapshot> {
+  const detectRuntime = opts.detectRuntime ?? defaultDetectRuntime;
   const warnings: string[] = [];
 
   let manifestIntegrations: (InstallManifestEntry | undefined)[] = [];
@@ -174,10 +220,30 @@ export async function buildReadinessSnapshot(cwd: string): Promise<ReadinessSnap
       baselinePresent: entryBaselinePresent,
       configPresent,
     });
+    // Runtime is OpenCode-only for now (FR40): probe the runtime PATH for the
+    // OpenCode entry, leave it `undefined` for every other agent so their rows
+    // render unchanged (AC4). Runtime is orthogonal to evidence (AC2) — it never
+    // feeds `computeEvidence`.
+    let runtime: RuntimeState | undefined;
+    if (entry.agent === "opencode") {
+      // The injected seam could reject; `status` must never throw (FR41), so
+      // degrade a rejected probe to "not verified" just like the PATH probe does.
+      runtime = (await detectRuntime(entry.agent).catch(() => false)) ? "verified" : "unverified";
+      // Only warn about the runtime when the plugin config is actually present
+      // on disk (AC1 precondition). If config is missing, the missing-config
+      // warning above already fired and outranks this — claiming "plugin
+      // installed" here would contradict that state.
+      if (runtime === "unverified" && missing.length === 0) {
+        warnings.push(
+          `${entry.agent}: plugin installed but OpenCode runtime not verified (\`${OPENCODE_RUNTIME_BIN}\` not found on PATH)`,
+        );
+      }
+    }
     const actionNeeded = computeAction({
       agent: entry.agent,
       trust: entry.trust,
       hasMissingConfig: missing.length > 0,
+      runtime,
       evidence,
     });
     integrations.push({
@@ -186,6 +252,7 @@ export async function buildReadinessSnapshot(cwd: string): Promise<ReadinessSnap
       configFiles,
       trust: entry.trust,
       evidence,
+      ...(runtime === undefined ? {} : { runtime }),
       actionNeeded,
     });
   }
@@ -253,8 +320,15 @@ export function renderReadiness(snapshot: ReadinessSnapshot): string[] {
   for (const it of snapshot.integrations) {
     const glyph = it.configFiles.every((c) => c.present) ? "✓" : "‼";
     const trust = it.trust ?? "—";
+    // Runtime token is shown ONLY when the integration carries a runtime axis
+    // (OpenCode today); other rows are byte-for-byte unchanged (AC4). It is its
+    // own token, separate from the config-presence glyph and from evidence.
+    const runtime =
+      it.runtime === undefined
+        ? ""
+        : `   runtime: ${it.runtime === "verified" ? "verified" : "not verified"}`;
     lines.push(
-      `    ${glyph} ${it.agent} (${it.displayName})   evidence: ${it.evidence}   trust: ${trust}   action: ${it.actionNeeded}`,
+      `    ${glyph} ${it.agent} (${it.displayName})   evidence: ${it.evidence}   trust: ${trust}${runtime}   action: ${it.actionNeeded}`,
     );
   }
 
