@@ -6,7 +6,7 @@ import {
   makeNonRepoDir,
   makeTempRepo,
 } from "../../tests/fixtures/repos/make-repo.js";
-import { diffNumstat, GitError, headSha, lsFiles, showTaskMd } from "./adapter.js";
+import { diffNumstat, diffPatch, GitError, headSha, lsFiles, showTaskMd } from "./adapter.js";
 
 describe("git adapter", () => {
   let repo: string;
@@ -132,6 +132,38 @@ describe("git adapter", () => {
       } finally {
         await cleanupRepo(nonRepo);
       }
+    });
+  });
+
+  describe("diffPatch", () => {
+    it("returns the unified patch text for a valid sha", async () => {
+      const baseline = await commit(repo, { "a.txt": "one\n", "task.md": "# task\n" }, "baseline");
+      await commit(repo, { "a.txt": "one\ntwo\n" }, "agent changes");
+
+      const patch = await diffPatch(baseline, { cwd: repo });
+      expect(patch).toContain("a.txt");
+      expect(patch).toContain("+two");
+    });
+
+    it("returns an empty string when nothing changed", async () => {
+      const baseline = await commit(repo, { "a.txt": "one\n" }, "baseline");
+      expect(await diffPatch(baseline, { cwd: repo })).toBe("");
+    });
+
+    it("throws GitError when there is no git repo", async () => {
+      const nonRepo = await makeNonRepoDir();
+      try {
+        await expect(diffPatch("HEAD", { cwd: nonRepo })).rejects.toBeInstanceOf(GitError);
+      } finally {
+        await cleanupRepo(nonRepo);
+      }
+    });
+
+    it("throws GitError for a bad sha in a real repo", async () => {
+      await commit(repo, { "a.txt": "one\n" }, "baseline");
+      // The dedup chain relies on this throwing (→ worktreeSignature returns
+      // undefined → surface) rather than silently returning "" and false-silencing.
+      await expect(diffPatch("deadbeef", { cwd: repo })).rejects.toBeInstanceOf(GitError);
     });
   });
 });

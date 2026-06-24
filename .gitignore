@@ -7,6 +7,10 @@ coverage
 *.log
 .DS_Store
 
+# Per-session hook state (scorecard mirror, trajectory, baseline, last-surfaced
+# dedup marker) — must never pollute the audited diff (Story 1.1, AC5).
+.blastcheck/
+
 # Non-functional artifacts (kept local for now)
 _bmad/
 _bmad-output/

@@ -79,6 +79,18 @@ export async function diffNumstat(sha: string, opts: GitOptions = {}): Promise<D
 }
 
 /**
+ * `git diff <sha>` → the full unified patch text (baseline → working tree).
+ *
+ * `core.quotepath=false` keeps non-ASCII path bytes unescaped so the patch is a
+ * stable, faithful image of the changed surface — it is hashed (not parsed) to
+ * fingerprint the worktree for state-dedup (Story 1.1). No-repo / bad-sha throw
+ * {@link GitError}, like the other adapter primitives.
+ */
+export async function diffPatch(sha: string, opts: GitOptions = {}): Promise<string> {
+  return runGit(["-c", "core.quotepath=false", "diff", sha], opts.cwd);
+}
+
+/**
  * `git show <sha>:task.md` → file content, or `null` when the file does not
  * exist at that sha (a signal). No-repo / bad-sha still throw {@link GitError}.
  */
