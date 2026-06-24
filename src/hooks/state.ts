@@ -9,6 +9,8 @@
  *  - `baseline`         SHA of the first session commit = the audit baseline.
  *  - `trajectory.jsonl` normalized, loader-readable tool events (appended).
  *  - `scorecard.json`   a mirror of the last `Stop` scorecard (stdout is primary).
+ *  - `last-surfaced`     state marker (`head_sha:worktree-hash`) of the last
+ *                        surfaced verdict, so no-op turns stay silent (Story 1.1).
  *
  * These helpers never throw on a missing file — hooks must degrade quietly and
  * must never crash a Claude Code session (consistency rule #6).
@@ -39,6 +41,15 @@ export function baselinePath(cwd: string): string {
 
 export function scorecardPath(cwd: string): string {
   return join(cwd, STATE_DIR, "scorecard.json");
+}
+
+/**
+ * Path to the `last-surfaced` marker — the `head_sha:worktree-hash` state of the
+ * last verdict the reporter actually surfaced. Lets a `hook stop` stay silent on
+ * a no-op turn when nothing changed since the last surfaced verdict (Story 1.1).
+ */
+export function lastSurfacedPath(cwd: string): string {
+  return join(cwd, STATE_DIR, "last-surfaced");
 }
 
 /** Read a small state file, trimmed; `undefined` when it does not exist. */

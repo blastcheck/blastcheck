@@ -6,14 +6,29 @@ import type { Scorecard } from "../scorecard/schema.js";
 
 // runAudit is mocked: the Stop hook's job is wiring (baseline resolution, stdout
 // contract, exit-code mapping, loop guard), not re-testing the audit itself.
-const { runAuditMock } = vi.hoisted(() => ({ runAuditMock: vi.fn() }));
+// worktreeSignature is mocked too so the state-dedup gate is deterministic
+// without a real git repo (the tmp dirs are not repos).
+const { runAuditMock, worktreeSignatureMock } = vi.hoisted(() => ({
+  runAuditMock: vi.fn(),
+  worktreeSignatureMock: vi.fn(),
+}));
 vi.mock("../index.js", () => ({ runAudit: runAuditMock }));
+vi.mock("./git.js", () => ({ worktreeSignature: worktreeSignatureMock }));
 
-import { EXIT } from "../types.js";
-import { baselinePath, scorecardPath, startHeadPath, writeStateFile } from "./state.js";
+import type { Reporter } from "../reporters/types.js";
+import { EXIT, type ExitCode } from "../types.js";
+import {
+  baselinePath,
+  lastSurfacedPath,
+  scorecardPath,
+  startHeadPath,
+  writeStateFile,
+} from "./state.js";
 import { runStop } from "./stop.js";
 
-function scorecard(verdict: Scorecard["verdict"]): Scorecard {
+// Default fixture has files_changed > 0 so it reaches the reporter under the FR2
+// gate; pass 0 explicitly to exercise empty-diff silence.
+function scorecard(verdict: Scorecard["verdict"], filesChanged = 1): Scorecard {
   return {
     schema_version: "1",
     run_id: "test-run",
@@ -26,8 +41,13 @@ function scorecard(verdict: Scorecard["verdict"]): Scorecard {
     gates: {},
     scores: {},
     findings: [],
-    stats: { files_changed: 0, lines_added: 0, lines_removed: 0, churn_pct: 0 },
+    stats: { files_changed: filesChanged, lines_added: 0, lines_removed: 0, churn_pct: 0 },
   };
+}
+
+/** A reporter spy that records calls and returns a fixed exit code. */
+function spyReporter(exit: ExitCode = EXIT.OK): Reporter & { surface: ReturnType<typeof vi.fn> } {
+  return { surface: vi.fn().mockResolvedValue(exit) };
 }
 
 describe("stop hook", () => {
@@ -36,6 +56,8 @@ describe("stop hook", () => {
 
   beforeEach(async () => {
     runAuditMock.mockReset();
+    worktreeSignatureMock.mockReset();
+    worktreeSignatureMock.mockResolvedValue("sig");
     stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     dir = await mkdtemp(join(tmpdir(), "blastcheck-stop-"));
@@ -106,5 +128,82 @@ describe("stop hook", () => {
 
     expect(await runStop({ stop_hook_active: true, cwd: dir }, dir)).toBe(EXIT.OK);
     expect(runAuditMock).not.toHaveBeenCalled();
+  });
+
+  describe("state-dedup (Story 1.1)", () => {
+    it("silences an empty diff (files_changed === 0) but still mirrors scorecard.json", async () => {
+      await writeStateFile(baselinePath(dir), "sha");
+      runAuditMock.mockResolvedValue(scorecard("warn", 0));
+      const reporter = spyReporter();
+
+      const code = await runStop({ cwd: dir }, dir, reporter);
+
+      expect(code).toBe(EXIT.OK);
+      expect(reporter.surface).not.toHaveBeenCalled();
+      // Source of truth is still durable (NFR6).
+      expect(JSON.parse(await readFile(scorecardPath(dir), "utf8"))).toMatchObject({
+        verdict: "warn",
+      });
+      // No state was surfaced → no marker written.
+      await expect(readFile(lastSurfacedPath(dir), "utf8")).rejects.toThrow();
+    });
+
+    it("surfaces once, then silences an unchanged second turn", async () => {
+      await writeStateFile(baselinePath(dir), "sha");
+      runAuditMock.mockResolvedValue(scorecard("warn"));
+      const reporter = spyReporter();
+
+      expect(await runStop({ cwd: dir }, dir, reporter)).toBe(EXIT.OK);
+      expect(await runStop({ cwd: dir }, dir, reporter)).toBe(EXIT.OK);
+
+      // Same head_sha + signature → the second turn is deduped.
+      expect(reporter.surface).toHaveBeenCalledTimes(1);
+      expect(await readFile(lastSurfacedPath(dir), "utf8")).toBe("head:sig");
+    });
+
+    it("does not write the marker when surface throws (next turn re-surfaces)", async () => {
+      await writeStateFile(baselinePath(dir), "sha");
+      runAuditMock.mockResolvedValue(scorecard("pass"));
+      const reporter: Reporter = {
+        surface: vi
+          .fn()
+          .mockRejectedValueOnce(new Error("channel down"))
+          .mockResolvedValue(EXIT.OK),
+      };
+
+      await runStop({ cwd: dir }, dir, reporter);
+      // A failed surface left no marker behind.
+      await expect(readFile(lastSurfacedPath(dir), "utf8")).rejects.toThrow();
+
+      // So the next turn surfaces again rather than going silent.
+      await runStop({ cwd: dir }, dir, reporter);
+      expect(reporter.surface).toHaveBeenCalledTimes(2);
+    });
+
+    it("surfaces (and writes a marker) when no prior marker exists", async () => {
+      await writeStateFile(baselinePath(dir), "sha");
+      runAuditMock.mockResolvedValue(scorecard("warn"));
+      const reporter = spyReporter();
+
+      await runStop({ cwd: dir }, dir, reporter);
+
+      expect(reporter.surface).toHaveBeenCalledTimes(1);
+      expect(await readFile(lastSurfacedPath(dir), "utf8")).toBe("head:sig");
+    });
+
+    it("does not dedup when the worktree signature is unavailable (git down)", async () => {
+      await writeStateFile(baselinePath(dir), "sha");
+      runAuditMock.mockResolvedValue(scorecard("warn"));
+      worktreeSignatureMock.mockResolvedValue(undefined);
+      const reporter = spyReporter();
+
+      // Both turns surface: ambiguity resolves toward surfacing, never false silence.
+      await runStop({ cwd: dir }, dir, reporter);
+      await runStop({ cwd: dir }, dir, reporter);
+
+      expect(reporter.surface).toHaveBeenCalledTimes(2);
+      // No reliable state → no marker recorded.
+      await expect(readFile(lastSurfacedPath(dir), "utf8")).rejects.toThrow();
+    });
   });
 });

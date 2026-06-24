@@ -7,7 +7,13 @@ import {
   makeTempRepo,
 } from "../../tests/fixtures/repos/make-repo.js";
 import { runSessionStart } from "./session-start.js";
-import { baselinePath, startHeadPath, trajectoryPath, writeStateFile } from "./state.js";
+import {
+  baselinePath,
+  lastSurfacedPath,
+  startHeadPath,
+  trajectoryPath,
+  writeStateFile,
+} from "./state.js";
 
 describe("session-start hook", () => {
   let repo: string;
@@ -31,28 +37,33 @@ describe("session-start hook", () => {
     expect(await readFile(startHeadPath(repo), "utf8")).toBe(sha);
   });
 
-  it("resets trajectory and stale baseline on a fresh (startup) session", async () => {
+  it("resets trajectory, stale baseline, and last-surfaced marker on a fresh (startup) session", async () => {
     repo = await makeTempRepo();
     await commit(repo, { "task.md": "# goal\n" }, "init");
     await writeStateFile(trajectoryPath(repo), '{"tool":"Read","args":{"path":"old.ts"}}\n');
     await writeStateFile(baselinePath(repo), "deadbeef");
+    await writeStateFile(lastSurfacedPath(repo), "deadbeef:oldsig");
 
     await runSessionStart({ source: "startup", cwd: repo }, repo);
 
     expect(await readFile(trajectoryPath(repo), "utf8")).toBe("");
     await expect(readFile(baselinePath(repo), "utf8")).rejects.toThrow();
+    // A stale marker must not dedup the first Stop of a fresh session (Story 1.1).
+    await expect(readFile(lastSurfacedPath(repo), "utf8")).rejects.toThrow();
   });
 
-  it("preserves trajectory and baseline on resume", async () => {
+  it("preserves trajectory, baseline, and last-surfaced marker on resume", async () => {
     repo = await makeTempRepo();
     await commit(repo, { "task.md": "# goal\n" }, "init");
     await writeStateFile(trajectoryPath(repo), '{"tool":"Read","args":{"path":"kept.ts"}}\n');
     await writeStateFile(baselinePath(repo), "cafebabe");
+    await writeStateFile(lastSurfacedPath(repo), "cafebabe:keptsig");
 
     await runSessionStart({ source: "resume", cwd: repo }, repo);
 
     expect(await readFile(trajectoryPath(repo), "utf8")).toContain("kept.ts");
     expect(await readFile(baselinePath(repo), "utf8")).toBe("cafebabe");
+    expect(await readFile(lastSurfacedPath(repo), "utf8")).toBe("cafebabe:keptsig");
   });
 
   it("does not throw and writes no start_head when there is no git repo", async () => {
