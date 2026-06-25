@@ -15,6 +15,7 @@ const { runAuditMock, worktreeSignatureMock } = vi.hoisted(() => ({
 vi.mock("../index.js", () => ({ runAudit: runAuditMock }));
 vi.mock("./git.js", () => ({ worktreeSignature: worktreeSignatureMock }));
 
+import { claudeCodeReporter } from "../reporters/claude-code.js";
 import type { Reporter } from "../reporters/types.js";
 import { EXIT, type ExitCode } from "../types.js";
 import {
@@ -204,6 +205,33 @@ describe("stop hook", () => {
       expect(reporter.surface).toHaveBeenCalledTimes(2);
       // No reliable state → no marker recorded.
       await expect(readFile(lastSurfacedPath(dir), "utf8")).rejects.toThrow();
+    });
+
+    // Story 1.3 ↔ 1.1: the gate-fail PUSH (decision:"block") goes through the SAME
+    // dedup gate. It fires once per state change, then the unchanged next turn is
+    // silent — so the forced continuation can never become a Stop→block loop (NFR1).
+    it("gate-fail push fires once via the real reporter, then the unchanged turn is silent", async () => {
+      await writeStateFile(baselinePath(dir), "sha");
+      const gateFail: Scorecard = { ...scorecard("fail"), gates: { "denied-files": "fail" } };
+      runAuditMock.mockResolvedValue(gateFail);
+
+      // First turn: the push surfaces — decision:"block" rides the hook JSON on exit 0.
+      expect(await runStop({ cwd: dir }, dir, claudeCodeReporter)).toBe(EXIT.OK);
+      const firstWrite = stdout.mock.calls.map((c) => c[0]).join("");
+      expect(JSON.parse(firstWrite).decision).toBe("block");
+      // The successful surface wrote the marker (gate-fail still returns EXIT.OK).
+      expect(await readFile(lastSurfacedPath(dir), "utf8")).toBe("head:sig");
+
+      // Second turn, same head_sha + signature → dedup silences the repeat block.
+      const writesBefore = stdout.mock.calls.length;
+      const auditsBefore = runAuditMock.mock.calls.length;
+      expect(await runStop({ cwd: dir }, dir, claudeCodeReporter)).toBe(EXIT.OK);
+      // Pin that the silence is the DEDUP path, not an unrelated early-return: turn 2
+      // must run the audit (so it reached past the baseline/empty-diff checks to the
+      // last-surfaced compare) AND still emit nothing. Without the audit assertion, a
+      // regression that bailed before surfacing for any reason would pass this test.
+      expect(runAuditMock.mock.calls.length).toBe(auditsBefore + 1);
+      expect(stdout.mock.calls.length).toBe(writesBefore); // no second surface
     });
   });
 });
