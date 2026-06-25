@@ -1,10 +1,14 @@
 /**
- * Human-readable scorecard summary → stderr ONLY (NFR9, consistency rule #6).
+ * Human-readable scorecard summary.
  *
- * `stdout` is reserved for `scorecard.json` (the machine contract); this module
- * writes NOTHING there. Every line goes to `process.stderr` so a CI step can
- * pipe `stdout` to a file while a human still sees a readable summary. The
- * verdict itself is carried by the exit code, not by stdout.
+ * Two call sites, two streams, ONE renderer: `formatScorecard` builds the text
+ * and touches no stream; the caller picks where it goes.
+ *  - `printScorecard` → `process.stderr` (NFR9, consistency rule #6): `stdout`
+ *    is reserved for `scorecard.json` (the machine contract), so the summary
+ *    rides stderr — a CI step can pipe stdout to a file and a human still reads
+ *    the summary. The verdict itself is carried by the exit code, not stdout.
+ *  - `blastcheck show` (FR7) → `process.stdout`: there the human render IS the
+ *    payload (a pull command), not a side-channel to the machine contract.
  */
 
 import type { Scorecard } from "./schema.js";
@@ -16,15 +20,10 @@ const VERDICT_GLYPH: Record<Scorecard["verdict"], string> = {
   fail: "✗",
 };
 
-/** Write one line to stderr (never stdout). */
-function line(text = ""): void {
-  process.stderr.write(`${text}\n`);
-}
-
 /**
  * Format a number for the summary, guarding non-finite values. The live path
  * never emits a non-finite score (`serialize` drops them, `z.number()` rejects
- * `NaN`), but `printScorecard` is a public export callable on any scorecard, so
+ * `NaN`), but the formatter is a public export callable on any scorecard, so
  * `NaN.toFixed()` (literal `"NaN"`) is replaced with a readable placeholder.
  */
 function fmt(n: number, digits: number): string {
@@ -32,12 +31,19 @@ function fmt(n: number, digits: number): string {
 }
 
 /**
- * Print a readable summary of `scorecard` to stderr: verdict header, the
+ * Build a readable summary of `scorecard` as text: verdict header, the
  * baseline→head range, evidence level, gates, scores, findings and git stats.
- * Pure I/O — it derives nothing the scorecard doesn't already hold.
+ * Pure — it derives nothing the scorecard doesn't already hold and writes to NO
+ * stream (the caller chooses stderr via {@link printScorecard} or stdout via
+ * `blastcheck show`). The returned string ends with a trailing newline, so it
+ * is byte-identical to writing each line with `\n` appended.
  */
-export function printScorecard(scorecard: Scorecard): void {
+export function formatScorecard(scorecard: Scorecard): string {
   const { verdict, baseline_sha, head_sha, evidence_level } = scorecard;
+  const lines: string[] = [];
+  const line = (text = ""): void => {
+    lines.push(text);
+  };
 
   line(`blastcheck: ${VERDICT_GLYPH[verdict]} ${verdict.toUpperCase()}`);
   line(`  range: ${baseline_sha} → ${head_sha}`);
@@ -77,4 +83,15 @@ export function printScorecard(scorecard: Scorecard): void {
   line(
     `  stats: ${files_changed} files, +${lines_added}/-${lines_removed}, churn ${fmt(churn_pct, 1)}%`,
   );
+
+  return lines.map((l) => `${l}\n`).join("");
+}
+
+/**
+ * Print a readable summary of `scorecard` to stderr ONLY (never stdout). A thin
+ * wrapper over {@link formatScorecard} — the rendering lives there so `blastcheck
+ * show` can reuse it against stdout without duplicating the format.
+ */
+export function printScorecard(scorecard: Scorecard): void {
+  process.stderr.write(formatScorecard(scorecard));
 }

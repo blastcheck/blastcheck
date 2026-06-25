@@ -22,7 +22,7 @@ import {
   runPostToolUse,
 } from "./hooks/post-tool-use.js";
 import { runSessionStart } from "./hooks/session-start.js";
-import { parseHookPayload, readStdin } from "./hooks/state.js";
+import { parseHookPayload, readStateFile, readStdin, scorecardPath } from "./hooks/state.js";
 import { runStop } from "./hooks/stop.js";
 import { runAudit } from "./index.js";
 import { getIntegration, isAgentId, supportedAgentsForMessage } from "./integrations/registry.js";
@@ -33,7 +33,8 @@ import { codexReporter } from "./reporters/codex.js";
 import { opencodeReporter } from "./reporters/opencode.js";
 import { resolveSurfacingOptions } from "./reporters/options.js";
 import { renderPrComment } from "./scorecard/markdown.js";
-import { printScorecard } from "./scorecard/print.js";
+import { formatScorecard, printScorecard } from "./scorecard/print.js";
+import { scorecardSchema } from "./scorecard/schema.js";
 import { adaptLogToJsonl } from "./trajectory/adapters/adapt.js";
 import { isTrajectoryFormat, TRAJECTORY_FORMATS } from "./trajectory/adapters/index.js";
 import { EXIT, type ExitCode } from "./types.js";
@@ -202,6 +203,50 @@ export function buildProgram(outcome: Outcome): Command {
       const snapshot = await buildReadinessSnapshot(process.cwd());
       printReadiness(snapshot);
       outcome.code = EXIT.OK;
+    });
+
+  // On-demand pull command (FR7, Story 1.4): render the last
+  // `.blastcheck/scorecard.json` mirror in human-readable form so a user never
+  // has to `cat` it. Unlike every other command, the human render is the PAYLOAD
+  // here, so it goes to STDOUT — `show` is a pull command, not the machine
+  // `scorecard.json` contract that `run`/`hook stop` reserve stdout for. The
+  // no-scorecard and unreadable cases are normal outcomes (notice on stderr,
+  // stdout untouched, exit 0), never a thrown tool error (consistency rule #6).
+  program
+    .command("show")
+    .description("Render the last .blastcheck/scorecard.json in human-readable form (stdout).")
+    .option("-v, --verbose", "verbose (debug) logging to stderr")
+    .action(async (opts: { verbose?: boolean }) => {
+      setVerbose(Boolean(opts.verbose));
+      outcome.code = EXIT.OK;
+
+      const raw = await readStateFile(scorecardPath(process.cwd()));
+      if (raw === undefined || raw.length === 0) {
+        log("warn", "no scorecard yet — run an audit first");
+        return;
+      }
+
+      // Mirror `status`'s tolerant read-back: a corrupt or non-conforming mirror
+      // is degraded to a friendly notice, never an unchecked object to the
+      // renderer and never a throw that would mis-map to exit 2.
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        log("warn", "scorecard is unreadable (not valid JSON) — re-run an audit");
+        return;
+      }
+      const result = scorecardSchema.safeParse(parsed);
+      if (!result.success) {
+        log(
+          "warn",
+          "scorecard is unreadable (does not match the scorecard schema) — re-run an audit",
+        );
+        return;
+      }
+
+      // The one place `show` touches stdout: its human render (a pull payload).
+      process.stdout.write(formatScorecard(result.data));
     });
 
   // Hidden hook entrypoints invoked BY the installed hooks — they read the

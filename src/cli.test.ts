@@ -38,14 +38,21 @@ vi.mock("./integrations/status.js", () => ({
 // The `hook` subcommands are wiring-only at the CLI layer; their
 // behavior is covered by the hooks' own tests. Here we mock them so the CLI test
 // stays a pure arg-parsing/exit-code check and never blocks on real stdin.
-const { runStopMock, runSessionStartMock, runPostToolUseMock, readStdinMock, runCodexNotifyMock } =
-  vi.hoisted(() => ({
-    runStopMock: vi.fn(),
-    runSessionStartMock: vi.fn(),
-    runPostToolUseMock: vi.fn(),
-    readStdinMock: vi.fn(),
-    runCodexNotifyMock: vi.fn(),
-  }));
+const {
+  runStopMock,
+  runSessionStartMock,
+  runPostToolUseMock,
+  readStdinMock,
+  runCodexNotifyMock,
+  readStateFileMock,
+} = vi.hoisted(() => ({
+  runStopMock: vi.fn(),
+  runSessionStartMock: vi.fn(),
+  runPostToolUseMock: vi.fn(),
+  readStdinMock: vi.fn(),
+  runCodexNotifyMock: vi.fn(),
+  readStateFileMock: vi.fn(),
+}));
 vi.mock("./hooks/stop.js", () => ({ runStop: runStopMock }));
 vi.mock("./hooks/session-start.js", () => ({ runSessionStart: runSessionStartMock }));
 vi.mock("./hooks/post-tool-use.js", () => ({ runPostToolUse: runPostToolUseMock }));
@@ -53,6 +60,10 @@ vi.mock("./hooks/notify.js", () => ({ runCodexNotify: runCodexNotifyMock }));
 vi.mock("./hooks/state.js", () => ({
   readStdin: readStdinMock,
   parseHookPayload: (text: string) => (text === "" ? undefined : JSON.parse(text)),
+  // `show` reads the scorecard mirror through these — the path helper stays real
+  // (a pure join) while the file read is faked per test.
+  scorecardPath: (cwd: string) => `${cwd}/.blastcheck/scorecard.json`,
+  readStateFile: readStateFileMock,
 }));
 
 import { main } from "./cli.js";
@@ -83,9 +94,11 @@ function argv(...args: string[]): string[] {
 
 describe("cli main", () => {
   let stdout: ReturnType<typeof vi.spyOn>;
+  let stderr: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     runAuditMock.mockReset();
+    readStateFileMock.mockReset();
     getIntegrationMock.mockReset();
     installMock.mockReset();
     getIntegrationMock.mockImplementation((id: string) => ({
@@ -111,7 +124,7 @@ describe("cli main", () => {
     readStdinMock.mockResolvedValue("");
     // Suppress (and capture) CLI output so the test log stays clean.
     stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   });
 
   afterEach(() => {
@@ -340,6 +353,51 @@ describe("cli main", () => {
     await expect(main(argv("status"))).resolves.toBe(EXIT.OK);
     expect(installMock).not.toHaveBeenCalled();
     expect(getIntegrationMock).not.toHaveBeenCalled();
+  });
+
+  it("show renders the last scorecard to stdout and exits 0", async () => {
+    // The mirror is present and valid → the human render lands on STDOUT (this is
+    // the one place `show` touches stdout — its payload, not a machine contract).
+    readStateFileMock.mockResolvedValue(JSON.stringify(scorecard("warn")));
+    await expect(main(argv("show"))).resolves.toBe(EXIT.OK);
+    const out = stdout.mock.calls.map((c) => String(c[0])).join("");
+    expect(out).toContain("blastcheck:");
+    expect(out).toContain("WARN");
+    expect(out).toContain("base → head");
+  });
+
+  it("show with no scorecard exits 0, writes nothing to stdout, notices on stderr", async () => {
+    readStateFileMock.mockResolvedValue(undefined);
+    await expect(main(argv("show"))).resolves.toBe(EXIT.OK);
+    expect(stdout.mock.calls.map((c) => String(c[0])).join("")).toBe("");
+    const err = stderr.mock.calls.map((c) => String(c[0])).join("");
+    expect(err.toLowerCase()).toContain("no scorecard");
+  });
+
+  it("show with an empty scorecard file is treated as no scorecard (exit 0, stdout empty)", async () => {
+    readStateFileMock.mockResolvedValue("");
+    await expect(main(argv("show"))).resolves.toBe(EXIT.OK);
+    expect(stdout.mock.calls.map((c) => String(c[0])).join("")).toBe("");
+    const err = stderr.mock.calls.map((c) => String(c[0])).join("");
+    expect(err.toLowerCase()).toContain("no scorecard");
+  });
+
+  it("show with malformed JSON exits 0, writes nothing to stdout, notices on stderr (no throw)", async () => {
+    readStateFileMock.mockResolvedValue("{ not valid json");
+    await expect(main(argv("show"))).resolves.toBe(EXIT.OK);
+    expect(stdout.mock.calls.map((c) => String(c[0])).join("")).toBe("");
+    const err = stderr.mock.calls.map((c) => String(c[0])).join("");
+    expect(err.toLowerCase()).toContain("unreadable");
+  });
+
+  it("show with a schema-invalid scorecard exits 0, writes nothing to stdout, notices on stderr", async () => {
+    // Valid JSON but not a Scorecard (fails safeParse) → same graceful path as
+    // corrupt JSON: never pass an unchecked object to the renderer.
+    readStateFileMock.mockResolvedValue(JSON.stringify({ verdict: "pass", extra: true }));
+    await expect(main(argv("show"))).resolves.toBe(EXIT.OK);
+    expect(stdout.mock.calls.map((c) => String(c[0])).join("")).toBe("");
+    const err = stderr.mock.calls.map((c) => String(c[0])).join("");
+    expect(err.toLowerCase()).toContain("unreadable");
   });
 
   it("hook stop maps the hook's exit code through to the process", async () => {

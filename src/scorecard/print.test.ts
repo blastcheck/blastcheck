@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { printScorecard } from "./print.js";
+import { formatScorecard, printScorecard } from "./print.js";
 import type { Scorecard } from "./schema.js";
 
 const scorecard: Scorecard = {
@@ -44,5 +44,36 @@ describe("printScorecard", () => {
     expect(out).toContain("scope_adherence: 0.83");
     expect(out).toContain("[info] scope-adhesion: out of scope (x.ts)");
     expect(out).toContain("2 files, +88/-12, churn 2.1%");
+  });
+});
+
+describe("formatScorecard", () => {
+  let stderr: ReturnType<typeof vi.spyOn>;
+  let stdout: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("RETURNS the rendered text and writes to NEITHER stream", () => {
+    const out = formatScorecard(scorecard);
+    expect(out).toContain("WARN");
+    expect(out).toContain("denied-files: pass");
+    expect(out).toContain("scope_adherence: 0.83");
+    expect(out).toContain("[info] scope-adhesion: out of scope (x.ts)");
+    expect(out).toContain("2 files, +88/-12, churn 2.1%");
+    expect(stderr).not.toHaveBeenCalled();
+    expect(stdout).not.toHaveBeenCalled();
+  });
+
+  it("renders byte-identical to what printScorecard writes to stderr", () => {
+    printScorecard(scorecard);
+    const written = stderr.mock.calls.map((c) => String(c[0])).join("");
+    expect(formatScorecard(scorecard)).toBe(written);
   });
 });
