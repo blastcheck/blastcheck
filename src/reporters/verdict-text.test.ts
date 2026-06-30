@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Scorecard } from "../scorecard/schema.js";
-import { verdictDetail, verdictHeadline } from "./verdict-text.js";
+import { verdictDetail, verdictHeadline, verdictSubline } from "./verdict-text.js";
 
 function scorecard(overrides: Partial<Scorecard> = {}): Scorecard {
   return {
@@ -21,8 +21,29 @@ function scorecard(overrides: Partial<Scorecard> = {}): Scorecard {
 }
 
 describe("verdictHeadline", () => {
-  it("pass reads as a calm all-clear line", () => {
-    expect(verdictHeadline(scorecard({ verdict: "pass" }))).toBe("blastcheck: ✓ pass — all clear");
+  it("empty: pass with no files changed reads as a dry no-op line", () => {
+    expect(verdictHeadline(scorecard({ verdict: "pass" }))).toBe(
+      "blastcheck: ✓ pass — no changes this session",
+    );
+  });
+
+  it("clean: pass with files changed names the count and confirms scope", () => {
+    const sc = scorecard({
+      verdict: "pass",
+      stats: { files_changed: 3, lines_added: 10, lines_removed: 2, churn_pct: 1.0 },
+    });
+    expect(verdictHeadline(sc)).toBe("blastcheck: ✓ pass — 3 files changed, scope ok");
+  });
+
+  it("fail-floor: a sub-floor score with no failed gate is restrained — no glyph, no upper-case", () => {
+    const sc = scorecard({
+      verdict: "fail",
+      scores: { scope_adherence: 0.2 },
+      findings: [{ severity: "high", check: "scope-adhesion", message: "out of scope" }],
+    });
+    expect(verdictHeadline(sc)).toBe(
+      "blastcheck: fail — scope_adherence below floor · 1 high · 0 files, churn 0.0%",
+    );
   });
 
   it("warn leads with the severity-mix, then git scale", () => {
@@ -47,22 +68,10 @@ describe("verdictHeadline", () => {
     );
   });
 
-  it("names a sub-floor score as a failing dimension (not a gate)", () => {
-    // scope_adherence (0.2) is below its 0.5 hard floor → a score-driven fail with
-    // no failed gate; the dimension is named from the snake_case score id.
-    const sc = scorecard({
-      verdict: "fail",
-      scores: { scope_adherence: 0.2 },
-      findings: [{ severity: "high", check: "scope-adhesion", message: "out of scope" }],
-    });
-    expect(verdictHeadline(sc)).toBe(
-      "blastcheck: ✗ FAIL — scope_adherence below floor · 1 high · 0 files, churn 0.0%",
-    );
-  });
-
   it("renders the severity-mix loudest-first (high → warn → info), omitting zero buckets", () => {
     const sc = scorecard({
       verdict: "fail",
+      gates: { "denied-files": "fail" },
       findings: [
         { severity: "info", check: "churn", message: "i" },
         { severity: "high", check: "denied-files", message: "h" },
@@ -71,8 +80,9 @@ describe("verdictHeadline", () => {
       ],
     });
     // Insertion order is info→high→warn→warn, but the render is high→warn→info.
+    // A failed gate ("denied-files") keeps this in the fail-gate alarm tier.
     expect(verdictHeadline(sc)).toBe(
-      "blastcheck: ✗ FAIL — 1 high, 2 warn, 1 info · 0 files, churn 0.0%",
+      "blastcheck: ✗ FAIL — denied-files failed · 1 high, 2 warn, 1 info · 0 files, churn 0.0%",
     );
   });
 
@@ -82,6 +92,50 @@ describe("verdictHeadline", () => {
     expect(verdictHeadline(scorecard({ verdict: "warn" }))).toBe(
       "blastcheck: ‼ warn — 0 files, churn 0.0%",
     );
+  });
+});
+
+describe("verdictSubline", () => {
+  it("warn with a required-checks warn finding: count-only, never echoes finding.message", () => {
+    const sc = scorecard({
+      verdict: "warn",
+      findings: [
+        {
+          severity: "warn",
+          check: "required-checks",
+          message: "expected check (auto-detected) did not run: npm test",
+        },
+        {
+          severity: "warn",
+          check: "required-checks",
+          message: "expected check (auto-detected) did not run: npm run lint",
+        },
+      ],
+    });
+    const sub = verdictSubline(sc);
+    expect(sub).toBe("not run: 2 checks");
+    expect(sub).not.toContain("npm test");
+    expect(sub).not.toContain("npm run lint");
+  });
+
+  it("warn with no required-checks finding: undefined", () => {
+    const sc = scorecard({
+      verdict: "warn",
+      findings: [{ severity: "warn", check: "churn", message: "high churn" }],
+    });
+    expect(verdictSubline(sc)).toBeUndefined();
+  });
+
+  it("fail-gate: a literal pointer at `blastcheck show`", () => {
+    const sc = scorecard({ verdict: "fail", gates: { "denied-files": "fail" } });
+    expect(verdictSubline(sc)).toBe("run `blastcheck show` for details");
+  });
+
+  it("fail-floor and pass: undefined (no second line)", () => {
+    expect(verdictSubline(scorecard({ verdict: "fail", scores: { scope_adherence: 0.2 } }))).toBe(
+      undefined,
+    );
+    expect(verdictSubline(scorecard({ verdict: "pass" }))).toBeUndefined();
   });
 });
 

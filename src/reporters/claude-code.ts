@@ -43,7 +43,7 @@
 
 import { EXIT } from "../types.js";
 import type { ReportContext, Reporter, SurfacingOptions } from "./types.js";
-import { verdictDetail, verdictHeadline } from "./verdict-text.js";
+import { isGateFail, verdictDetail, verdictHeadline, verdictSubline } from "./verdict-text.js";
 
 /** Bare-bones desktop alert: terminal bell + an OSC 9 notification (allowlisted). */
 function failAlert(headline: string): string {
@@ -57,7 +57,10 @@ export function buildClaudeCodeStopOutput(
 ): Record<string, unknown> {
   const { scorecard } = ctx;
   const headline = verdictHeadline(scorecard);
-  const out: Record<string, unknown> = { systemMessage: headline };
+  const subline = verdictSubline(scorecard);
+  const out: Record<string, unknown> = {
+    systemMessage: subline === undefined ? headline : `${headline}\n${subline}`,
+  };
 
   if (scorecard.verdict === "pass") return out; // brief positive line only — no alert/feedback
 
@@ -74,8 +77,8 @@ export function buildClaudeCodeStopOutput(
   // uncalibrated score-fail, NFR5); (3) the title is `verdictHeadline` — engine number/enum
   // fields only, never agent-controlled `finding.message`/`path` (NFR2 spirit, even though
   // a terminal sequence is not a model-injection channel).
-  const isGateFail = Object.values(scorecard.gates).some((s) => s === "fail");
-  if (scorecard.verdict === "fail" && isGateFail) out.terminalSequence = failAlert(headline);
+  if (scorecard.verdict === "fail" && isGateFail(scorecard))
+    out.terminalSequence = failAlert(headline);
 
   // Single channel (D6): NO branch sets `decision`/`reason` anymore — both
   // `decision:"block"` paths (opt-in §7.3 and the default gate-fail push) were removed
@@ -91,7 +94,7 @@ export function buildClaudeCodeStopOutput(
   // human-direct `.blastcheck/scorecard.json` mirror. Do NOT "simplify" this guard away —
   // dropping it silently reopens that injection surface. `warn` / score-fail are
   // unaffected (the guard is false for them) and still emit `additionalContext`.
-  if (options.feedback && !(scorecard.verdict === "fail" && isGateFail)) {
+  if (options.feedback && !(scorecard.verdict === "fail" && isGateFail(scorecard))) {
     out.hookSpecificOutput = {
       hookEventName: "Stop",
       additionalContext: verdictDetail(scorecard),

@@ -78,19 +78,60 @@ function reason(scorecard: Scorecard): string {
 }
 
 /**
- * The single-line verdict headline every channel leads with, e.g.
- *  - `blastcheck: ✓ pass — all clear`
- *  - `blastcheck: ‼ warn — 1 warn · 2 files, churn 1.0%`
- *  - `blastcheck: ✗ FAIL — denied-files failed · 1 high, 2 warn · 5 files, churn 12.3%`
- * `fail` is upper-cased for scannability; pass/warn stay lower-case (calmer).
+ * Whether a `fail` verdict is gate-driven — some hard gate (`denied-files`,
+ * `required-checks`) actually failed, as opposed to a score-driven fail (a
+ * sub-floor score, churn 2×, an uncalibrated threshold). Shared by the
+ * headline's gate-fail/fail-floor split and `claude-code.ts`'s
+ * `terminalSequence` trigger, so the two stay in lockstep by construction.
+ */
+export function isGateFail(scorecard: Scorecard): boolean {
+  return Object.values(scorecard.gates).some((s) => s === "fail");
+}
+
+/**
+ * The single-line verdict headline every channel leads with, one of five forms:
+ *  - clean: `blastcheck: ✓ pass — 3 files changed, scope ok`
+ *  - empty: `blastcheck: ✓ pass — no changes this session`
+ *  - warn: `blastcheck: ‼ warn — 1 warn · 2 files, churn 1.0%`
+ *  - fail-gate: `blastcheck: ✗ FAIL — denied-files failed · 1 high, 2 warn · 5 files, churn 12.3%`
+ *  - fail-floor: `blastcheck: fail — scope_adherence below floor`
+ * `fail-gate` is upper-cased with a glyph for scannability; fail-floor stays
+ * lower-case with no glyph (NFR-N3: a score-driven fail never gets alarm
+ * framing). pass/warn stay lower-case (calmer).
  */
 export function verdictHeadline(scorecard: Scorecard): string {
   const { verdict } = scorecard;
+  if (verdict === "pass") {
+    return scorecard.stats.files_changed === 0
+      ? `blastcheck: ${VERDICT_GLYPH.pass} pass — no changes this session`
+      : `blastcheck: ${VERDICT_GLYPH.pass} pass — ${scorecard.stats.files_changed} files changed, scope ok`;
+  }
+  if (verdict === "fail" && !isGateFail(scorecard)) {
+    return `blastcheck: fail — ${reason(scorecard) || "see scorecard"}`;
+  }
   const glyph = VERDICT_GLYPH[verdict];
   const label = verdict === "fail" ? "FAIL" : verdict;
-  if (verdict === "pass") return `blastcheck: ${glyph} ${label} — all clear`;
   const why = reason(scorecard) || "see scorecard";
   return `blastcheck: ${glyph} ${label} — ${why}`;
+}
+
+/**
+ * The optional second line for the Claude-Code-only multi-line `systemMessage`
+ * (AC #5): a count-only "not run" note on a `required-checks` warn finding, or
+ * a pointer at `blastcheck show` on a gate-driven fail. `undefined` for every
+ * other state (pass, fail-floor, or a warn with no `required-checks` finding).
+ */
+export function verdictSubline(scorecard: Scorecard): string | undefined {
+  if (scorecard.verdict === "warn") {
+    const count = scorecard.findings.filter(
+      (f) => f.check === "required-checks" && f.severity === "warn",
+    ).length;
+    return count > 0 ? `not run: ${count} checks` : undefined;
+  }
+  if (scorecard.verdict === "fail" && isGateFail(scorecard)) {
+    return "run `blastcheck show` for details";
+  }
+  return undefined;
 }
 
 /**

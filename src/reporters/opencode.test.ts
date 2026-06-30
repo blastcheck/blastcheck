@@ -40,7 +40,10 @@ const opts = (o: Partial<SurfacingOptions> = {}): SurfacingOptions => ({
 describe("buildOpencodeSurface", () => {
   it("pass: a brief visible line via message, variant success, no feedback", () => {
     const surface = buildOpencodeSurface(ctx("pass"), opts());
-    expect(surface).toEqual({ message: "blastcheck: ✓ pass — all clear", variant: "success" });
+    expect(surface).toEqual({
+      message: "blastcheck: ✓ pass — 1 files changed, scope ok",
+      variant: "success",
+    });
     expect(surface.feedback).toBeUndefined();
   });
 
@@ -66,10 +69,11 @@ describe("buildOpencodeSurface", () => {
   });
 
   it("feedback opt-in: adds verdictDetail on a fail; default off adds nothing", () => {
-    const off = buildOpencodeSurface(ctx("fail"), opts());
+    const sc = { gates: { "denied-files": "fail" } } as const;
+    const off = buildOpencodeSurface(ctx("fail", sc), opts());
     expect(off.feedback).toBeUndefined();
 
-    const on = buildOpencodeSurface(ctx("fail"), opts({ feedback: true }));
+    const on = buildOpencodeSurface(ctx("fail", sc), opts({ feedback: true }));
     expect(on.feedback).toContain("blastcheck: ✗ FAIL");
     // It is the shared verdictDetail block (multi-line, points at the scorecard).
     expect(on.feedback).toContain("full scorecard: .blastcheck/scorecard.json");
@@ -85,11 +89,17 @@ describe("buildOpencodeSurface", () => {
 
   it("feedback opt-in does NOT fire on pass (pass stays a bare toast)", () => {
     const surface = buildOpencodeSurface(ctx("pass"), opts({ feedback: true }));
-    expect(surface).toEqual({ message: "blastcheck: ✓ pass — all clear", variant: "success" });
+    expect(surface).toEqual({
+      message: "blastcheck: ✓ pass — 1 files changed, scope ok",
+      variant: "success",
+    });
   });
 
   it("block is a no-op for OpenCode v1 (never blocks, never adds fields)", () => {
-    const surface = buildOpencodeSurface(ctx("fail"), opts({ block: true }));
+    const surface = buildOpencodeSurface(
+      ctx("fail", { gates: { "denied-files": "fail" } }),
+      opts({ block: true }),
+    );
     expect(surface.feedback).toBeUndefined();
     expect(Object.keys(surface)).toEqual(["message", "variant"]);
   });
@@ -104,7 +114,10 @@ describe("opencodeReporter.surface", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("writes the surface JSON line to stdout and ALWAYS exits 0", async () => {
-    const code = await opencodeReporter.surface(ctx("fail"), DEFAULT_SURFACING);
+    const code = await opencodeReporter.surface(
+      ctx("fail", { gates: { "denied-files": "fail" } }),
+      DEFAULT_SURFACING,
+    );
     expect(code).toBe(EXIT.OK);
     const written = stdout.mock.calls.map((c) => c[0]).join("");
     expect(JSON.parse(written).message).toContain("FAIL");

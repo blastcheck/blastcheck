@@ -34,7 +34,7 @@ const opts = (o: Partial<SurfacingOptions> = {}): SurfacingOptions => ({
 describe("buildCodexStopOutput", () => {
   it("pass: a brief visible line via systemMessage, nothing else", () => {
     const out = buildCodexStopOutput(ctx("pass"), opts());
-    expect(out).toEqual({ systemMessage: "blastcheck: ✓ pass — all clear" });
+    expect(out).toEqual({ systemMessage: "blastcheck: ✓ pass — 1 files changed, scope ok" });
   });
 
   it("warn: a visible line, no alert field, no feedback", () => {
@@ -62,10 +62,11 @@ describe("buildCodexStopOutput", () => {
   });
 
   it("feedback opt-in: adds additionalContext on a fail; default off adds nothing", () => {
-    const off = buildCodexStopOutput(ctx("fail"), opts());
+    const sc = { gates: { "denied-files": "fail" } } as const;
+    const off = buildCodexStopOutput(ctx("fail", sc), opts());
     expect(off.hookSpecificOutput).toBeUndefined();
 
-    const on = buildCodexStopOutput(ctx("fail"), opts({ feedback: true }));
+    const on = buildCodexStopOutput(ctx("fail", sc), opts({ feedback: true }));
     expect(on.hookSpecificOutput).toMatchObject({ hookEventName: "Stop" });
     expect((on.hookSpecificOutput as { additionalContext: string }).additionalContext).toContain(
       "blastcheck: ✗ FAIL",
@@ -84,11 +85,14 @@ describe("buildCodexStopOutput", () => {
 
   it("feedback opt-in does NOT fire on pass (pass stays a bare systemMessage)", () => {
     const out = buildCodexStopOutput(ctx("pass"), opts({ feedback: true }));
-    expect(out).toEqual({ systemMessage: "blastcheck: ✓ pass — all clear" });
+    expect(out).toEqual({ systemMessage: "blastcheck: ✓ pass — 1 files changed, scope ok" });
   });
 
   it("block opt-in: a fail emits decision:block + reason, and subsumes feedback", () => {
-    const out = buildCodexStopOutput(ctx("fail"), opts({ block: true, feedback: true }));
+    const out = buildCodexStopOutput(
+      ctx("fail", { gates: { "denied-files": "fail" } }),
+      opts({ block: true, feedback: true }),
+    );
     expect(out.decision).toBe("block");
     expect(out.reason).toContain("blastcheck: ✗ FAIL");
     // block already feeds `reason` back — don't also duplicate via additionalContext.
@@ -109,7 +113,10 @@ describe("codexReporter.surface", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("writes the hook JSON to stdout and ALWAYS exits 0 (verdict rides in systemMessage)", async () => {
-    const code = await codexReporter.surface(ctx("fail"), DEFAULT_SURFACING);
+    const code = await codexReporter.surface(
+      ctx("fail", { gates: { "denied-files": "fail" } }),
+      DEFAULT_SURFACING,
+    );
     expect(code).toBe(EXIT.OK);
     const written = stdout.mock.calls.map((c) => c[0]).join("");
     expect(JSON.parse(written).systemMessage).toContain("FAIL");
