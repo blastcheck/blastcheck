@@ -278,18 +278,21 @@ describe("stop hook", () => {
       await expect(readFile(lastSurfacedPath(dir), "utf8")).rejects.toThrow();
     });
 
-    // Story 1.3 ↔ 1.1: the gate-fail PUSH (decision:"block") goes through the SAME
-    // dedup gate. It fires once per state change, then the unchanged next turn is
-    // silent — so the forced continuation can never become a Stop→block loop (NFR1).
-    it("gate-fail push fires once via the real reporter, then the unchanged turn is silent", async () => {
+    // Story 1.3 ↔ 1.1: a gate-fail surface goes through the SAME dedup gate. It fires
+    // once per state change, then the unchanged next turn is silent. (Story 1.3 removed
+    // the `decision:"block"` push; the gate-fail now surfaces via `systemMessage` only,
+    // but the once-then-silent dedup behavior is unchanged — it never keyed on `decision`.)
+    it("gate-fail surface fires once via the real reporter, then the unchanged turn is silent", async () => {
       await writeStateFile(baselinePath(dir), "sha");
       const gateFail: Scorecard = { ...scorecard("fail"), gates: { "denied-files": "fail" } };
       runAuditMock.mockResolvedValue(gateFail);
 
-      // First turn: the push surfaces — decision:"block" rides the hook JSON on exit 0.
+      // First turn: the gate-fail surfaces via systemMessage on exit 0 (no decision/block).
       expect(await runStop({ cwd: dir }, dir, claudeCodeReporter)).toBe(EXIT.OK);
       const firstWrite = stdout.mock.calls.map((c) => c[0]).join("");
-      expect(JSON.parse(firstWrite).decision).toBe("block");
+      const firstOut = JSON.parse(firstWrite);
+      expect(firstOut.decision).toBeUndefined();
+      expect(firstOut.systemMessage).toContain("FAIL");
       // The successful surface wrote the marker (gate-fail still returns EXIT.OK).
       expect(await readFile(lastSurfacedPath(dir), "utf8")).toBe(MARKER);
 
