@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Scorecard } from "../scorecard/schema.js";
 import { EXIT } from "../types.js";
 import { buildClaudeCodeStopOutput, claudeCodeReporter } from "./claude-code.js";
+import * as desktopAlertModule from "./desktop-alert.js";
 import { DEFAULT_SURFACING, type SurfacingOptions } from "./types.js";
 
 const BEL = String.fromCharCode(7); // 
@@ -48,7 +49,7 @@ describe("buildClaudeCodeStopOutput", () => {
     expect(out).toEqual({ systemMessage: "blastcheck: ✓ pass — no changes this session" });
   });
 
-  it("warn: a visible line, but NO desktop alert (alert is fail-only, §7.1)", () => {
+  it("warn: a visible line; the JSON-contract terminalSequence field stays gate-fail-only (the OS-level desktopAlert side effect is covered in the `surface` suite below, since it's not part of this JSON)", () => {
     const out = buildClaudeCodeStopOutput(
       ctx("warn", { findings: [{ severity: "warn", check: "churn", message: "x" }] }),
       opts(),
@@ -289,10 +290,44 @@ describe("buildClaudeCodeStopOutput", () => {
 
 describe("claudeCodeReporter.surface", () => {
   let stdout: ReturnType<typeof vi.spyOn>;
+  let alert: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    alert = vi.spyOn(desktopAlertModule, "desktopAlert").mockImplementation(() => {});
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it("fires the OS-level desktopAlert on warn (the render-gap fallback — not gated to gate-fail)", async () => {
+    await claudeCodeReporter.surface(
+      ctx("warn", { findings: [{ severity: "warn", check: "churn", message: "x" }] }),
+      DEFAULT_SURFACING,
+    );
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith("blastcheck: ‼ warn — 1 warn · 1 files, churn 0.0%");
+  });
+
+  it("fires desktopAlert on a gate-fail, carrying the bare headline (no agent-controlled text)", async () => {
+    await claudeCodeReporter.surface(
+      ctx("fail", { gates: { "denied-files": "fail" } }),
+      DEFAULT_SURFACING,
+    );
+    expect(alert).toHaveBeenCalledWith(
+      "blastcheck: ✗ FAIL — denied-files failed · 1 files, churn 0.0%",
+    );
+  });
+
+  it("fires desktopAlert on a score-driven fail-floor too (the render gap doesn't care why it's non-pass)", async () => {
+    await claudeCodeReporter.surface(
+      ctx("fail", { scores: { scope_adherence: 0.2 } }),
+      DEFAULT_SURFACING,
+    );
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire desktopAlert on pass", async () => {
+    await claudeCodeReporter.surface(ctx("pass"), DEFAULT_SURFACING);
+    expect(alert).not.toHaveBeenCalled();
+  });
 
   it("writes the hook JSON to stdout and ALWAYS exits 0 (verdict rides in systemMessage)", async () => {
     const code = await claudeCodeReporter.surface(

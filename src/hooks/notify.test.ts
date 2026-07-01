@@ -56,10 +56,11 @@ describe("runCodexNotify", () => {
     expect(desktopAlertMock).not.toHaveBeenCalled();
   });
 
-  it("warn scorecard → no alert (alert is fail-only)", async () => {
+  it("warn scorecard → raises a desktop alert too (widened 2026-07-01: parity with Claude Code's render-gap fallback, not fail-only anymore)", async () => {
     await writeScorecard(dir, "warn");
     await runCodexNotify(JSON.stringify({ cwd: dir }));
-    expect(desktopAlertMock).not.toHaveBeenCalled();
+    expect(desktopAlertMock).toHaveBeenCalledTimes(1);
+    expect(desktopAlertMock.mock.calls[0][0]).toContain("blastcheck: ‼ warn");
   });
 
   it("missing scorecard (the common cross-project case) → no alert, no throw", async () => {

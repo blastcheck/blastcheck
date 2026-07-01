@@ -38,8 +38,9 @@ hooks via its `/hooks` review before they run.
 OpenCode as you usually would. The installed hooks/plugin capture the trajectory
 and run the audit at session end — you don't invoke an audit command per change.
 At the end of each turn the verdict is **pushed to you natively**: a brief line
-(or toast) on every result, quiet on `pass`, plus a desktop alert on `fail`. You
-no longer have to remember to check — see [Verdict surfacing](#verdict-surfacing).
+(or toast) on every result, quiet on `pass`, plus a desktop alert on `warn`/`fail`
+(exact gating varies per agent). You no longer have to remember to check — see
+[Verdict surfacing](#verdict-surfacing).
 
 **3. Check readiness any time.** (The pull signal, still here alongside the push
 signal above.)
@@ -83,6 +84,7 @@ When an agent session ends, the `Stop`/idle hook runs the audit and emits a
 
 - Node.js >= 20 (developed on Node 22 LTS)
 - A system `git` on `PATH`
+- A POSIX-like shell (bash/zsh) for the git shell-outs.
 
 ## Install & build
 
@@ -181,10 +183,30 @@ At the end of every turn the audit doesn't just write a file — it **pushes the
 verdict to you in your agent's own idiom**. The picture:
 
 - **`pass` is quiet:** one brief confirmation line — no desktop alert, no feedback.
-- **`warn` shows a visible line** (a toast in OpenCode), no desktop alert.
+- **`warn` shows a visible line** (a toast in OpenCode); on Claude Code and Codex
+  it's paired with a desktop alert too (see the render-gap note below) — OpenCode
+  stays visible-line-only on `warn`.
 - **`fail` is impossible to miss:** the visible line **plus** a desktop alert (on
   macOS/Linux; on other platforms the alert degrades quietly and the visible line
   still shows).
+
+**Render-gap note (2026-07-01):** on Claude Code, whether the visible line
+actually renders in the chat turned out to depend on the *client*
+(`claude-desktop` vs the `cli` terminal), not just the installed version — the
+`systemMessage`/`terminalSequence` hook-JSON fields are consumed by Claude Code's
+engine reliably, but `entrypoint: claude-desktop` was empirically observed to render
+neither one visibly ([`hook_system_message` renders as nothing in the Desktop chat
+UI](https://github.com/anthropics/claude-code/issues/50542)). Codex has the same
+class of gap on its own Desktop client
+([openai/codex#23319](https://github.com/openai/codex/issues/23319)). Because of
+that, both agents now fire the same OS-level `desktopAlert` (`osascript`/
+`notify-send`) on **every non-`pass` verdict** — `warn` included, not gated to a
+gate-fail/fail the way `terminalSequence`/the old Codex `notify` gating were —
+since it's the one channel that doesn't depend on either agent's own chat-UI
+rendering at all. OpenCode has not (yet) had this specific render-gap
+investigation run against it, so it keeps its original `fail`-only gating. See
+`_bmad-output/implementation-artifacts/1-1-spike-systemmessage-stop-contract.md`
+for the full evidence chain.
 
 This is the **push** signal — you no longer have to remember to run `blastcheck
 status` or open the scorecard. The **pull** signals still exist for when you want
@@ -223,8 +245,8 @@ mechanism names match the installed hooks/plugin — cross-reference the
 
 | Channel | Claude Code | Codex | OpenCode |
 | ------- | ----------- | ----- | -------- |
-| Visible line on **every** verdict (brief on `pass`) | `systemMessage` | `systemMessage` | TUI toast (`client.tui.showToast`) |
-| Desktop alert on **`fail` only** | `terminalSequence` (OSC 9 + terminal bell) | user-level `notify` → `blastcheck notify codex` → desktop alert | `osascript` / `notify-send`, fired CLI-side |
+| Visible line on **every** verdict (brief on `pass`) | `systemMessage` (render not guaranteed on every client — see render-gap note above) | `systemMessage` (same render-not-guaranteed caveat — Codex Desktop has its own open bug, [openai/codex#23319](https://github.com/openai/codex/issues/23319)) | TUI toast (`client.tui.showToast`) |
+| Desktop alert on **non-`pass`** (`warn` and `fail`) | `terminalSequence` (OSC 9 + terminal bell, gate-fail only) **plus** `osascript`/`notify-send` (`desktopAlert`, every `warn`/`fail`) | `notify-send`/`osascript`, **`warn` and `fail`** (widened 2026-07-01 for the same reason as Claude Code), via user-level `notify` → `blastcheck notify codex` — note `notify` itself has documented reliability gaps on Windows/WSL2 ([openai/codex#8929](https://github.com/openai/codex/issues/8929)) | `osascript`/`notify-send`, **`fail` only**, fired CLI-side |
 | Opt-in **feedback** (`warn`/`fail` only, never `pass`) | `hookSpecificOutput.additionalContext` | `hookSpecificOutput.additionalContext` | `client.session.prompt` |
 | Opt-in hard **block** (`fail` only) | **not implemented (no-op — removed, single-channel design)** | `decision: "block"` | **not implemented (no-op in v1)** |
 
@@ -308,11 +330,11 @@ Codex requires you to review and trust the installed command hooks via its
 `/hooks` review before they run — `blastcheck status` surfaces this as a pending
 **review hooks in Codex `/hooks`** action until you do.
 
-#### Desktop fail-alert (user-level `notify`)
+#### Desktop alert (user-level `notify`)
 
-The Codex visible verdict line rides the hooks above, but the **`fail` desktop
-alert** travels a different channel: a project-local `.codex/config.toml`
-**ignores** Codex's `notify` setting, so blastcheck writes the **user-level**
+The Codex visible verdict line rides the hooks above, but the **desktop alert**
+travels a different channel: a project-local `.codex/config.toml` **ignores**
+Codex's `notify` setting, so blastcheck writes the **user-level**
 `~/.codex/config.toml` instead. As part of `init --agent codex` it adds, idempotently:
 
 ```toml
@@ -320,7 +342,12 @@ notify = ["blastcheck", "notify", "codex"]
 ```
 
 This points Codex's turn-complete `notify` program at `blastcheck notify codex`,
-which raises a desktop notification only on a `fail` verdict (silent no-op otherwise).
+which raises a desktop notification on a `warn` or `fail` verdict (silent no-op on
+`pass`). Widened from `fail`-only on 2026-07-01: Codex's own `systemMessage`
+inherits the same "engine accepts it, some client silently drops it" risk profile
+as Claude Code's (Codex Desktop has its own open bug,
+[openai/codex#23319](https://github.com/openai/codex/issues/23319)), so `warn`
+needs the same OS-level fallback `fail` already had.
 
 - **If a different user-level `notify` already exists**, blastcheck **leaves it
   untouched** and prints a manual step instead — point `notify` at

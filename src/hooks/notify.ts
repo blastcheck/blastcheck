@@ -1,17 +1,31 @@
 /**
  * `blastcheck notify codex <payload>` — the Codex user-level `notify` program.
  *
- * Codex has no Stop-output alert primitive, so the `fail` desktop alert is
- * decoupled from the Stop hook (brief §6.2/§7.4). Codex invokes the user-level
- * `notify` program on `agent-turn-complete`, passing the event payload as the
- * final argv positional (NOT stdin — `json.loads(sys.argv[1])` per the docs).
- * This handler reads `cwd` from that payload, reads the scorecard mirror
- * `runStop` wrote at `${cwd}/.blastcheck/scorecard.json`, and raises a desktop
- * alert ONLY when the verdict is `fail`.
+ * Codex has no Stop-output alert primitive, so the desktop alert is decoupled
+ * from the Stop hook (brief §6.2/§7.4). Codex invokes the user-level `notify`
+ * program on `agent-turn-complete`, passing the event payload as the final argv
+ * positional (NOT stdin — `json.loads(sys.argv[1])` per the docs). This handler
+ * reads `cwd` from that payload, reads the scorecard mirror `runStop` wrote at
+ * `${cwd}/.blastcheck/scorecard.json`, and raises a desktop alert on `warn` OR
+ * `fail` (2026-07-01: widened from fail-only — see below).
+ *
+ * **Why `warn` too (parity with the Claude Code reporter's same-day fix):**
+ * Codex's `systemMessage` inherits the identical "engine accepts it, some client
+ * UI doesn't render it" risk profile confirmed for Claude Code
+ * (`claude-code.ts`'s file header) — Codex has its own open, on-point bug,
+ * [openai/codex#23319](https://github.com/openai/codex/issues/23319): a
+ * completed Stop hook's result renders as an EMPTY panel in Codex Desktop
+ * instead of showing the `systemMessage`. If that client also silently drops
+ * `warn`, gating this alert to `fail`-only would leave `warn` invisible there
+ * exactly like the Claude Code gap this mirrors. `notify`'s own cross-platform
+ * reliability has documented gaps too (silently no-ops on Windows/WSL2, per
+ * [openai/codex#8929](https://github.com/openai/codex/issues/8929)) — it is not
+ * a perfect floor, but it's strictly better than the fail-only status quo, and
+ * it's this project's ONLY OS-level channel for Codex today.
  *
  * Critically, `notify` fires for EVERY Codex turn in EVERY project on the
  * machine — most of which have no blastcheck scorecard. So this MUST be a silent
- * no-op on a missing/unreadable/non-fail scorecard, a missing `cwd`, or a
+ * no-op on a missing/unreadable/passing scorecard, a missing `cwd`, or a
  * malformed payload: never throw, never write stderr noise. The caller always
  * exits 0.
  */
@@ -56,14 +70,17 @@ export async function runCodexNotify(payloadArg: string | undefined): Promise<vo
   } catch {
     return; // a corrupt mirror is not our problem to surface here
   }
-  if (!isObject(scorecard) || scorecard.verdict !== "fail") return;
+  if (!isObject(scorecard) || (scorecard.verdict !== "fail" && scorecard.verdict !== "warn")) {
+    return;
+  }
 
-  // Only a `fail` raises the desktop alert (§7.1: alert on fail only). We only
-  // validated `verdict` above, so a partial/corrupt mirror (e.g. `fail` with a
-  // missing `gates`/`findings`) could make `verdictHeadline` dereference an
-  // absent field and throw. Guard the render so this handler keeps its "never
-  // throws, caller always exits 0" contract — notify fires for every project on
-  // the machine, so a thrown stack trace here would be both wrong and loud.
+  // `warn` or `fail` raises the desktop alert (widened 2026-07-01 — see file
+  // header); `pass` stays silent. We only validated `verdict` above, so a
+  // partial/corrupt mirror (e.g. `fail` with a missing `gates`/`findings`) could
+  // make `verdictHeadline` dereference an absent field and throw. Guard the
+  // render so this handler keeps its "never throws, caller always exits 0"
+  // contract — notify fires for every project on the machine, so a thrown stack
+  // trace here would be both wrong and loud.
   try {
     desktopAlert(verdictHeadline(scorecard as Scorecard));
   } catch {

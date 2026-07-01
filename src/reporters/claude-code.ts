@@ -5,25 +5,38 @@
  * engine as control JSON — NOT piped anywhere a human or CI reads. So the raw
  * scorecard on stdout (the old behavior) is silently swallowed: it parses as JSON
  * but carries no recognized control field, so nothing surfaces. That is exactly
- * why the verdict was invisible. This reporter instead emits the native hook JSON,
- * through a single visible channel plus two degradation layers:
+ * why the verdict was invisible. This reporter emits the native hook JSON plus one
+ * OS-level side channel:
  *
  *  - `systemMessage` — the single visible verdict line, shown on EVERY verdict
  *    including pass and fail (D6 single channel: a fail surfaces here too, never via
  *    a model-mediated `decision:"block"` continuation). blastcheck registers via
  *    `.claude/settings.json` (NOT a plugin), so the issue #50542 plugin-render
- *    regression does not apply and `systemMessage` renders. Verified channel
- *    against Claude Code v2.1.191.
- *  - `terminalSequence` — a desktop alert (BEL + OSC 9) on a fail **from a gate**
- *    only (FR3/NFR5: a score-driven fail stays calm and silent at this channel,
- *    same as a warn — raw thresholds are uncalibrated). Both sequences are on
- *    Claude Code's allowlist and need v2.1.141+. It is the gate-fail visibility
- *    chain's RENDER-INDEPENDENT FLOOR: the one channel that does not depend on
- *    transcript render, so it survives exactly the regressed-version case where
- *    `systemMessage` may not surface. This OS-level toast is a legitimate degradation
- *    layer below the visible line (systemMessage → terminalSequence → scorecard.json
- *    + exit), NOT a redundant nudge. Delivery is best-effort: a headless CI / no-notification host
- *    silently drops it — there, the red exit/check is the floor instead.
+ *    regression does not apply. **However:** whether Claude Code's own chat UI
+ *    renders this string as anything visible is a SEPARATE, unverified question from
+ *    whether the engine accepts it (see `_bmad-output/implementation-artifacts/
+ *    1-1-spike-systemmessage-stop-contract.md`, "Post-Merge Verification", 2026-07-01):
+ *    the engine reliably records a `hook_system_message` attachment on every sampled
+ *    version/entrypoint, but on `entrypoint: claude-desktop` that attachment was
+ *    empirically confirmed to produce NO visible line, 3/3 live turns. Do not repeat
+ *    the old "verified against v2.1.191" claim — that was never re-checked against
+ *    a live GUI turn and turned out to be false for at least one client.
+ *  - `terminalSequence` — a BEL + OSC 9 escape, emitted only on a **gate-driven**
+ *    fail (FR3/NFR5: a score-driven fail stays calm, same as a warn). This rides the
+ *    same hook-JSON contract as `systemMessage`, so it inherits the identical
+ *    unverified-render risk — it is NOT a proven independent floor, just a second
+ *    field on the same channel.
+ *  - `desktopAlert(...)` (from `./desktop-alert.js`) — a genuine OS-level
+ *    notification (`osascript`/`notify-send`), fired directly by THIS process as a
+ *    side effect in `surface()`, independent of anything Claude Code's engine or UI
+ *    does with the hook JSON. Fires on every non-`pass` verdict (`warn` and `fail`
+ *    alike — deliberately NOT gated to gate-fail the way `terminalSequence` is): the
+ *    render-gap finding above showed a `claude-desktop` warn produces literally no
+ *    signal on the JSON-contract channels, so `warn` needs a real fallback too, not
+ *    just `fail`. This is the actual render-independent floor (it doesn't touch
+ *    Claude Code's hook JSON at all); `systemMessage`/`terminalSequence` are kept for
+ *    clients where they do render (and for the copy-pasteable line in the transcript).
+ *    Best-effort/quiet-degrading like the Codex path — see `desktop-alert.ts`.
  *  - `hookSpecificOutput.additionalContext` — feeds the verdict back to Claude on
  *    warn / score-fail when `feedback` is enabled (opt-in, §7.2; needs v2.1.163+).
  *    A GATE-fail deliberately SUPPRESSES this even with `feedback` on: agent-controlled
@@ -36,12 +49,13 @@
  *
  * The scorecard itself is NOT written to stdout here — it stays the
  * `.blastcheck/scorecard.json` mirror `runStop` already wrote (source of truth,
- * §4.3, and the durable degradation floor below `systemMessage`/`terminalSequence`).
+ * §4.3, and the durable degradation floor below every surfacing channel above).
  * stderr is left clean: on exit 0 Claude Code hides hook stderr, so a
  * summary there would only be transcript noise.
  */
 
 import { EXIT } from "../types.js";
+import { desktopAlert } from "./desktop-alert.js";
 import type { ReportContext, Reporter, SurfacingOptions } from "./types.js";
 import { isGateFail, verdictDetail, verdictHeadline, verdictSubline } from "./verdict-text.js";
 
@@ -108,6 +122,12 @@ export const claudeCodeReporter: Reporter = {
   surface(ctx: ReportContext, options: SurfacingOptions) {
     const out = buildClaudeCodeStopOutput(ctx, options);
     process.stdout.write(`${JSON.stringify(out)}\n`);
+    // The one channel that does not depend on Claude Code's own render of the hook
+    // JSON (see file header): fires on `warn` too, not just a gate-fail, because the
+    // render-gap finding showed `warn` needs a real fallback on `claude-desktop` just
+    // as much as `fail` does. `desktopAlert` degrades quietly on its own (no try/catch
+    // needed here).
+    if (ctx.scorecard.verdict !== "pass") desktopAlert(verdictHeadline(ctx.scorecard));
     // Verdict rides in `systemMessage`, never the exit code.
     return EXIT.OK;
   },
