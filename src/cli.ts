@@ -39,7 +39,7 @@ import { adaptLogToJsonl } from "./trajectory/adapters/adapt.js";
 import { isTrajectoryFormat, TRAJECTORY_FORMATS } from "./trajectory/adapters/index.js";
 import { EXIT, type ExitCode } from "./types.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 
 /** Options Commander parses for the `run` subcommand. */
 interface RunOptions {
