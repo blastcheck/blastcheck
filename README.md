@@ -167,7 +167,7 @@ required_checks:
   - "npm test"
 surfacing:
   feedback: false # inject the verdict back to the agent on warn/fail (opt-in)
-  block: false    # hard-block a fail — Claude Code / Codex only (opt-in)
+  block: false    # hard-block a fail — Codex only, opt-in (no-op on Claude Code/OpenCode)
 ```
 
 Both `surfacing` flags default `false`; they tune the end-of-turn egress layer,
@@ -197,14 +197,23 @@ presentation layer on top of that file, never a replacement for it. No history
 database is introduced; each run overwrites the one scorecard, and every channel
 degrades quietly if it isn't available.
 
-The visible line reads the same across every agent (the glyph signals the
-verdict; `fail` is upper-cased for scannability, `pass`/`warn` stay lower-case):
+The visible line is one of five deterministic forms, built only from safe
+enum/number scorecard fields — never raw finding text (the glyph signals the
+verdict; `fail-gate` is upper-cased for scannability, everything else stays
+calm/lower-case):
 
 ```text
-blastcheck: ✓ pass — all clear
-blastcheck: ‼ warn — 2 findings
+blastcheck: ✓ pass — 3 files changed, scope ok   (clean)
+blastcheck: ✓ pass — no changes this session      (empty)
+blastcheck: ‼ warn — 2 findings                   (warn)
 blastcheck: ✗ FAIL — scope-adhesion failed; 1 finding
+run `blastcheck show` for details                  (fail-gate: a hard gate failed)
+blastcheck: fail — scope_adherence below floor    (fail-floor: score-driven, calm)
 ```
+
+Claude Code's `systemMessage` gains that second `run \`blastcheck show\` for
+details` line only on a **fail-gate** verdict, pointing at the detail `show`
+already surfaces — Codex/OpenCode stay single-line.
 
 ### Per-agent behavior
 
@@ -217,12 +226,14 @@ mechanism names match the installed hooks/plugin — cross-reference the
 | Visible line on **every** verdict (brief on `pass`) | `systemMessage` | `systemMessage` | TUI toast (`client.tui.showToast`) |
 | Desktop alert on **`fail` only** | `terminalSequence` (OSC 9 + terminal bell) | user-level `notify` → `blastcheck notify codex` → desktop alert | `osascript` / `notify-send`, fired CLI-side |
 | Opt-in **feedback** (`warn`/`fail` only, never `pass`) | `hookSpecificOutput.additionalContext` | `hookSpecificOutput.additionalContext` | `client.session.prompt` |
-| Opt-in hard **block** (`fail` only) | `decision: "block"` | `decision: "block"` | **not implemented (no-op in v1)** |
+| Opt-in hard **block** (`fail` only) | **not implemented (no-op — removed, single-channel design)** | `decision: "block"` | **not implemented (no-op in v1)** |
 
-The visible line, feedback, and block all travel in the hook's stdout JSON on a
-clean exit `0` (Claude Code / Codex) — the exit code is never used to carry the
-verdict. The Codex `fail` alert is the one exception that rides a separate
-channel; see [Codex](#codex) for why and how to set it up.
+The visible line and feedback travel in the hook's stdout JSON on a clean exit
+`0` (Claude Code / Codex) — the exit code is never used to carry the verdict.
+Hard block only exists on Codex today; Claude Code surfaces a `fail` via the
+visible line + desktop alert only, never a model-mediated block/continuation.
+The Codex `fail` alert is the one exception that rides a separate channel; see
+[Codex](#codex) for why and how to set it up.
 
 ### Feedback and blocking (opt-in)
 
@@ -244,11 +255,12 @@ choice. Truthy tokens are `1` / `true` / `yes` / `on`; falsy tokens are `0` /
   injected prompt can start a new turn → which re-runs the audit → which can feed
   the still-failing verdict back again. This is exactly why feedback is
   opt-in/default-OFF; it converges naturally once the agent fixes the issue.
-- **Block** turns a `fail` into a hard stop (Claude Code / Codex `decision:
-  "block"` + a reason). It is meant for CI-style gating and is off by default so a
-  normal local session is never blocked. **OpenCode does not implement the hard
-  block in v1 — `block` is a no-op there** (no parity is implied); the reporter
-  interface can take a CI opt-in later.
+- **Block** turns a `fail` into a hard stop (Codex `decision: "block"` + a
+  reason). It is meant for CI-style gating and is off by default so a normal
+  local session is never blocked. **Claude Code and OpenCode do not implement
+  the hard block — `block` is a no-op on both** (Claude Code removed it in
+  favor of a single always-visible `systemMessage` channel; no parity across
+  agents is implied).
 
 ## Agent integration status
 
